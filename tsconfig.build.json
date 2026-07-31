@@ -1,0 +1,19 @@
+// Production build config.
+//
+// The base tsconfig includes tests and prisma/seed.ts so the editor and
+// `npm run typecheck` see the whole project. Compiling with it would set
+// rootDir to the repo root and emit `dist/src/server.js`, plus ship the test
+// suite into the container.
+//
+// This config narrows the input to src/ alone, so the output is `dist/server.js`
+// and the image carries only what production runs.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "sourceMap": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "tests", "prisma"]
+}

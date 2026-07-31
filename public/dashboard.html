@@ -1,0 +1,849 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patient Registry — Voice Intake</title>
+<meta name="description" content="Patient records collected by the voice intake agent.">
+<!--
+  One file, no build step, no network.
+
+  Everything is inline on purpose: no CDN, no web font, no remote image, no
+  favicon request. The page is served from the same origin as the API, so
+  `fetch('/patients')` needs no CORS layer and no base URL to configure.
+
+  Two rules the renderer must keep:
+    1. Patient-derived values go in through `textContent`, never `innerHTML`.
+       `city` and `address_line_1` accept arbitrary characters server-side, so
+       string-concatenated HTML here would be a stored-XSS path through our own
+       POST endpoint.
+    2. Dates are formatted by string surgery, never by `new Date(...)`.
+       `date_of_birth` already arrives as MM/DD/YYYY, and `toLocaleDateString()`
+       emits DD/MM/YYYY under a non-US locale. Same UTC discipline as
+       src/lib/serialize.ts.
+-->
+<style>
+  /* --- Palette. `color-scheme` is what makes form controls, scrollbars and
+         the caret legible in a dark browser theme; the custom properties do
+         the rest. --------------------------------------------------------- */
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f6f8;
+    --surface: #ffffff;
+    --surface-alt: #fafbfc;
+    --border: #dfe4ea;
+    --border-strong: #c6cdd6;
+    --text: #1b2430;
+    --muted: #5f6b7a;
+    --accent: #2c6e6a;
+    --accent-soft: #e6f0ef;
+    --danger: #9b2f28;
+    --danger-soft: #fbecea;
+    --shadow: 0 1px 2px rgba(20, 28, 38, .06), 0 6px 18px rgba(20, 28, 38, .05);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12161b;
+      --surface: #1a1f26;
+      --surface-alt: #202730;
+      --border: #2c343e;
+      --border-strong: #3b4552;
+      --text: #e6eaef;
+      --muted: #9aa6b4;
+      --accent: #6fc0b8;
+      --accent-soft: #1d2c2c;
+      --danger: #f0918a;
+      --danger-soft: #2c1c1b;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 6px 18px rgba(0, 0, 0, .3);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 400 16px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+    font-feature-settings: "tnum" 1;
+  }
+
+  .page {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 32px 20px 72px;
+  }
+
+  /* --- Header --------------------------------------------------------- */
+  header { margin-bottom: 28px; }
+
+  .eyebrow {
+    margin: 0 0 6px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  h1 {
+    margin: 0 0 6px;
+    font-size: 28px;
+    line-height: 1.2;
+    font-weight: 650;
+    letter-spacing: -.01em;
+  }
+
+  .lede {
+    margin: 0;
+    max-width: 62ch;
+    color: var(--muted);
+    font-size: 15px;
+  }
+
+  /* --- Filters -------------------------------------------------------- */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+  }
+
+  .filters {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+    gap: 16px;
+    align-items: end;
+    padding: 18px 20px;
+    margin-bottom: 18px;
+  }
+
+  .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+
+  .field label {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  input[type="text"], input[type="tel"], input[type="date"] {
+    width: 100%;
+    padding: 9px 11px;
+    font: inherit;
+    font-size: 15px;
+    color: var(--text);
+    background: var(--surface-alt);
+    border: 1px solid var(--border-strong);
+    border-radius: 7px;
+  }
+
+  input:focus-visible, button:focus-visible, tr:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .hint {
+    min-height: 15px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .hint[data-warn="true"] { color: var(--danger); }
+
+  button {
+    font: inherit;
+    font-size: 14px;
+    font-weight: 550;
+    color: var(--text);
+    background: var(--surface-alt);
+    border: 1px solid var(--border-strong);
+    border-radius: 7px;
+    padding: 9px 15px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button[disabled] { opacity: .5; cursor: default; }
+
+  /* --- Status bar ----------------------------------------------------- */
+  .statusbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+    align-items: baseline;
+    justify-content: space-between;
+    margin: 0 2px 12px;
+  }
+
+  .count { font-size: 15px; font-weight: 600; }
+  .count .qualifier { font-weight: 400; color: var(--muted); }
+  .meta { font-size: 13px; color: var(--muted); }
+
+  /* --- Error banner --------------------------------------------------- */
+  .banner {
+    margin-bottom: 18px;
+    padding: 14px 16px;
+    border: 1px solid var(--danger);
+    border-left-width: 4px;
+    border-radius: 8px;
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+  .banner[hidden] { display: none; }
+  .banner h2 { margin: 0 0 4px; font-size: 15px; font-weight: 650; }
+  .banner p { margin: 0 0 10px; font-size: 14px; color: var(--text); }
+  .banner code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+  }
+
+  /* --- Table ---------------------------------------------------------- */
+  .tablewrap { overflow: hidden; }
+
+  table { width: 100%; border-collapse: collapse; }
+
+  thead th {
+    padding: 11px 16px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--surface-alt);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  tbody td {
+    padding: 13px 16px;
+    font-size: 15px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+
+  tr.patient { cursor: pointer; }
+  tr.patient:hover td { background: var(--accent-soft); }
+  tr.patient[aria-expanded="true"] td { background: var(--accent-soft); }
+  tr.patient .name { font-weight: 600; }
+  tr.patient .name .chev {
+    display: inline-block;
+    width: 14px;
+    margin-right: 6px;
+    color: var(--muted);
+    transition: transform .12s ease-in-out;
+  }
+  tr.patient[aria-expanded="true"] .name .chev { transform: rotate(90deg); }
+  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* --- Expanded detail ------------------------------------------------ */
+  tr.detail td {
+    padding: 4px 16px 22px;
+    background: var(--accent-soft);
+  }
+
+  .detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 18px 28px;
+  }
+
+  .detail-group h3 {
+    margin: 0 0 8px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .detail-group dl { margin: 0; display: grid; gap: 6px; }
+  .detail-group dt { font-size: 12px; color: var(--muted); }
+  .detail-group dd { margin: 0 0 4px; font-size: 14px; overflow-wrap: anywhere; }
+  .detail-group dd.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+
+  /* --- Empty / loading ------------------------------------------------ */
+  .placeholder { padding: 46px 24px; text-align: center; }
+  .placeholder h2 { margin: 0 0 6px; font-size: 17px; font-weight: 600; }
+  .placeholder p { margin: 0 auto; max-width: 46ch; color: var(--muted); font-size: 14px; }
+
+  footer {
+    margin-top: 26px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  footer a { color: var(--accent); }
+
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px;
+    margin: -1px; padding: 0; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  /* --- Narrow screens: the table becomes a stack of cards. ------------ */
+  @media (max-width: 780px) {
+    .page { padding: 24px 14px 56px; }
+    h1 { font-size: 23px; }
+    .filters { grid-template-columns: 1fr; gap: 14px; }
+    .filters .actions { justify-self: stretch; }
+    .filters .actions button { width: 100%; }
+
+    thead { display: none; }
+    table, tbody, tr, td { display: block; width: 100%; }
+
+    tr.patient {
+      padding: 6px 0 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    tr.patient td {
+      display: flex;
+      gap: 14px;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 5px 16px;
+      border: 0;
+      text-align: right;
+    }
+    tr.patient td::before {
+      content: attr(data-label);
+      flex: 0 0 auto;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      text-align: left;
+    }
+    tr.patient td.name { text-align: left; font-size: 16px; }
+    tr.patient td.name::before { content: none; }
+    tr.detail td { padding: 4px 16px 20px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header>
+    <p class="eyebrow">Voice intake</p>
+    <h1>Patient Registry</h1>
+    <p class="lede">
+      A read-only view of <code>GET /patients</code>. Most records here were collected over the phone
+      by the voice intake agent; the registry also carries records created directly through the API,
+      plus a pair of seeded demo patients. Anything written through the API is validated server-side
+      before it reaches Postgres.
+    </p>
+  </header>
+
+  <form class="panel filters" id="filters" autocomplete="off">
+    <div class="field">
+      <label for="f-last-name">Last name</label>
+      <input type="text" id="f-last-name" name="last_name" placeholder="Davis" maxlength="50">
+      <span class="hint" id="h-last-name"></span>
+    </div>
+
+    <div class="field">
+      <label for="f-dob">Date of birth</label>
+      <input type="date" id="f-dob" name="date_of_birth" min="1900-01-01">
+      <span class="hint" id="h-dob"></span>
+    </div>
+
+    <div class="field">
+      <label for="f-phone">Phone number</label>
+      <input type="tel" id="f-phone" name="phone_number" placeholder="(512) 555-0142" maxlength="20">
+      <span class="hint" id="h-phone"></span>
+    </div>
+
+    <div class="field actions">
+      <button type="button" id="reset">Clear filters</button>
+      <span class="hint"></span>
+    </div>
+  </form>
+
+  <div class="statusbar">
+    <p class="count" id="count" aria-live="polite">Loading patients…</p>
+    <p class="meta" id="meta"></p>
+  </div>
+
+  <div class="banner" id="error" role="alert" hidden>
+    <h2 id="error-title">Could not load patients</h2>
+    <p id="error-message"></p>
+    <button type="button" id="retry">Try again</button>
+  </div>
+
+  <div class="panel tablewrap">
+    <table>
+      <caption class="visually-hidden">Registered patients. Select a row to see the full record.</caption>
+      <thead>
+        <tr>
+          <th scope="col">Patient</th>
+          <th scope="col">Date of birth</th>
+          <th scope="col">Sex</th>
+          <th scope="col">Phone</th>
+          <th scope="col">City / State</th>
+          <th scope="col">ZIP</th>
+          <th scope="col">Registered</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="placeholder" id="placeholder">
+      <h2>Loading…</h2>
+      <p>Fetching records from the API.</p>
+    </div>
+  </div>
+
+  <footer>
+    <p>
+      Live API: <a href="/patients">/patients</a> · <a href="/health">/health</a> ·
+      Call <strong>+1 (662) 443-8181</strong> to register a new patient by voice.
+    </p>
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var EMPTY = '—'; // em dash, used wherever an optional field is null
+  var DEBOUNCE_MS = 300;
+
+  var els = {
+    form: document.getElementById('filters'),
+    lastName: document.getElementById('f-last-name'),
+    dob: document.getElementById('f-dob'),
+    phone: document.getElementById('f-phone'),
+    hintLastName: document.getElementById('h-last-name'),
+    hintDob: document.getElementById('h-dob'),
+    hintPhone: document.getElementById('h-phone'),
+    reset: document.getElementById('reset'),
+    retry: document.getElementById('retry'),
+    count: document.getElementById('count'),
+    meta: document.getElementById('meta'),
+    error: document.getElementById('error'),
+    errorTitle: document.getElementById('error-title'),
+    errorMessage: document.getElementById('error-message'),
+    rows: document.getElementById('rows'),
+    placeholder: document.getElementById('placeholder')
+  };
+
+  var expanded = Object.create(null); // patient_id -> true
+  var inFlight = null;                // AbortController for the current request
+  var debounceTimer = null;
+  var filtersApplied = false;
+
+  // -------------------------------------------------------------------------
+  // Formatting. Deliberately string-only — see the note at the top of the file.
+  // -------------------------------------------------------------------------
+
+  /** 10 bare digits -> (512) 555-0142. Anything else is shown as it arrived. */
+  function formatPhone(value) {
+    if (typeof value !== 'string') return EMPTY;
+    var digits = value.replace(/\D/g, '');
+    if (digits.length !== 10) return value || EMPTY;
+    return '(' + digits.slice(0, 3) + ') ' + digits.slice(3, 6) + '-' + digits.slice(6);
+  }
+
+  /** ISO 8601 UTC -> MM/DD/YYYY, by slicing. No Date, so no timezone shift. */
+  function formatIsoDate(value) {
+    if (typeof value !== 'string') return EMPTY;
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+    return m ? m[2] + '/' + m[3] + '/' + m[1] : value;
+  }
+
+  /** ISO 8601 UTC -> MM/DD/YYYY HH:MM UTC, for the detail panel. */
+  function formatIsoDateTime(value) {
+    if (typeof value !== 'string') return EMPTY;
+    var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
+    if (!m) return value;
+    return m[2] + '/' + m[3] + '/' + m[1] + ' ' + m[4] + ':' + m[5] + ' UTC';
+  }
+
+  function orDash(value) {
+    return (value === null || value === undefined || value === '') ? EMPTY : String(value);
+  }
+
+  function plural(n, one, many) {
+    return n === 1 ? one : many;
+  }
+
+  // -------------------------------------------------------------------------
+  // DOM helpers. Every patient value reaches the page through textContent.
+  // -------------------------------------------------------------------------
+
+  function el(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = text;
+    return node;
+  }
+
+  function cell(label, text, className) {
+    var td = el('td', className || null, text);
+    td.setAttribute('data-label', label);
+    return td;
+  }
+
+  /** A titled group of dt/dd pairs; returns null when every value is empty. */
+  function detailGroup(title, pairs) {
+    var meaningful = pairs.filter(function (pair) { return pair.always || pair.value; });
+    if (meaningful.length === 0) return null;
+
+    var group = el('div', 'detail-group');
+    group.appendChild(el('h3', null, title));
+
+    var dl = el('dl');
+    meaningful.forEach(function (pair) {
+      dl.appendChild(el('dt', null, pair.label));
+      dl.appendChild(el('dd', pair.mono ? 'mono' : null, orDash(pair.value)));
+    });
+    group.appendChild(dl);
+    return group;
+  }
+
+  // -------------------------------------------------------------------------
+  // Rendering
+  // -------------------------------------------------------------------------
+
+  function buildDetailRow(patient) {
+    var tr = el('tr', 'detail');
+    var td = el('td');
+    td.colSpan = 7;
+
+    var grid = el('div', 'detail-grid');
+
+    var groups = [
+      detailGroup('Contact', [
+        { label: 'Phone', value: formatPhone(patient.phone_number), always: true },
+        { label: 'Email', value: patient.email, always: true },
+        { label: 'Preferred language', value: patient.preferred_language, always: true }
+      ]),
+      detailGroup('Address', [
+        { label: 'Street', value: patient.address_line_1, always: true },
+        { label: 'Unit / Apt', value: patient.address_line_2 },
+        {
+          label: 'City, State ZIP',
+          value: patient.city + ', ' + patient.state + ' ' + patient.zip_code,
+          always: true
+        }
+      ]),
+      detailGroup('Insurance', [
+        { label: 'Provider', value: patient.insurance_provider },
+        { label: 'Member ID', value: patient.insurance_member_id }
+      ]),
+      detailGroup('Emergency contact', [
+        { label: 'Name', value: patient.emergency_contact_name },
+        {
+          label: 'Phone',
+          value: patient.emergency_contact_phone ? formatPhone(patient.emergency_contact_phone) : null
+        }
+      ]),
+      detailGroup('Record', [
+        { label: 'Patient ID', value: patient.patient_id, always: true, mono: true },
+        { label: 'Created', value: formatIsoDateTime(patient.created_at), always: true },
+        { label: 'Last updated', value: formatIsoDateTime(patient.updated_at), always: true }
+      ])
+    ];
+
+    groups.forEach(function (group) {
+      if (group) grid.appendChild(group);
+    });
+
+    td.appendChild(grid);
+    tr.appendChild(td);
+    return tr;
+  }
+
+  function buildPatientRow(patient) {
+    var tr = el('tr', 'patient');
+    var isOpen = expanded[patient.patient_id] === true;
+
+    tr.tabIndex = 0;
+    tr.setAttribute('role', 'button');
+    tr.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+
+    var name = cell('Patient', null, 'name');
+    var chev = el('span', 'chev', '›'); // single right angle quote
+    chev.setAttribute('aria-hidden', 'true');
+    name.appendChild(chev);
+    name.appendChild(document.createTextNode(patient.first_name + ' ' + patient.last_name));
+
+    tr.appendChild(name);
+    tr.appendChild(cell('Date of birth', patient.date_of_birth, 'num'));
+    tr.appendChild(cell('Sex', patient.sex));
+    tr.appendChild(cell('Phone', formatPhone(patient.phone_number), 'num'));
+    tr.appendChild(cell('City / State', patient.city + ', ' + patient.state));
+    tr.appendChild(cell('ZIP', patient.zip_code, 'num'));
+    tr.appendChild(cell('Registered', formatIsoDate(patient.created_at), 'num'));
+
+    function toggle() {
+      if (expanded[patient.patient_id]) {
+        delete expanded[patient.patient_id];
+      } else {
+        expanded[patient.patient_id] = true;
+      }
+      // Re-rendering replaces this <tr>, which drops keyboard focus onto
+      // <body> — so a second Enter would not collapse the row it just opened.
+      // The id is handed back so the rebuilt row can reclaim focus.
+      render(lastPatients, patient.patient_id);
+    }
+
+    tr.addEventListener('click', toggle);
+    tr.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+        event.preventDefault();
+        toggle();
+      }
+    });
+
+    return { row: tr, open: isOpen };
+  }
+
+  var lastPatients = [];
+
+  /** `focusId` is set only by a row toggle; a fetch re-render passes nothing. */
+  function render(patients, focusId) {
+    lastPatients = patients;
+    els.rows.textContent = '';
+
+    var focusRow = null;
+
+    patients.forEach(function (patient) {
+      var built = buildPatientRow(patient);
+      if (focusId !== undefined && patient.patient_id === focusId) focusRow = built.row;
+      els.rows.appendChild(built.row);
+      if (built.open) els.rows.appendChild(buildDetailRow(patient));
+    });
+
+    if (focusRow) focusRow.focus();
+
+    var n = patients.length;
+    els.count.textContent = '';
+    els.count.appendChild(
+      document.createTextNode(n + ' ' + plural(n, 'patient', 'patients'))
+    );
+    if (filtersApplied) {
+      els.count.appendChild(el('span', 'qualifier', ' matching the current filters'));
+    }
+
+    if (n === 0) {
+      showPlaceholder(
+        filtersApplied ? 'No matching patients' : 'No patients registered yet',
+        filtersApplied
+          ? 'Nothing in the registry matches these filters. Clear them to see every record.'
+          : 'The registry is empty. Call +1 (662) 443-8181 and complete an intake — the record ' +
+            'appears here as soon as the agent saves it.'
+      );
+    } else {
+      hidePlaceholder();
+    }
+  }
+
+  function showPlaceholder(title, body) {
+    els.placeholder.textContent = '';
+    els.placeholder.appendChild(el('h2', null, title));
+    els.placeholder.appendChild(el('p', null, body));
+    els.placeholder.hidden = false;
+  }
+
+  function hidePlaceholder() {
+    els.placeholder.hidden = true;
+  }
+
+  function showError(title, message) {
+    els.errorTitle.textContent = title;
+    els.errorMessage.textContent = message;
+    els.error.hidden = false;
+  }
+
+  function clearError() {
+    els.error.hidden = true;
+  }
+
+  // -------------------------------------------------------------------------
+  // Filters -> query string
+  //
+  // Both text filters are gated client-side, because the API validates them:
+  // `last_name` must be non-empty and `phone_number` must normalize to ten
+  // digits, or `GET /patients` answers 400. Sending a half-typed value would
+  // replace the table with an error banner on the way to a valid one, so a
+  // partial value is held back and explained inline instead.
+  // -------------------------------------------------------------------------
+
+  function digitsOf(raw) {
+    var digits = raw.replace(/\D/g, '');
+    if (digits.length === 11 && digits.charAt(0) === '1') digits = digits.slice(1);
+    return digits;
+  }
+
+  function collectFilters() {
+    var params = new URLSearchParams();
+    var applied = false;
+
+    // `last_name` is an EXACT match server-side (case-insensitive), not a
+    // prefix search, so "D" returns nothing for "Davis" — an empty table with
+    // no explanation reads as a broken registry on first use. Say so inline,
+    // the way the phone field explains its own gating. Not `data-warn`: the
+    // value IS being applied, it is just matched whole, so this is guidance
+    // rather than an error.
+    var lastName = els.lastName.value.trim();
+    if (lastName) {
+      params.set('last_name', lastName);
+      applied = true;
+      els.hintLastName.textContent = 'Matched in full — "Dav" will not find "Davis".';
+    } else {
+      els.hintLastName.textContent = '';
+    }
+    els.hintLastName.removeAttribute('data-warn');
+
+    // <input type="date"> yields YYYY-MM-DD, which the API's ISO branch accepts
+    // and which avoids percent-encoding a slash.
+    var dob = els.dob.value;
+    if (dob) {
+      params.set('date_of_birth', dob);
+      applied = true;
+    }
+    els.hintDob.textContent = '';
+
+    var phoneRaw = els.phone.value.trim();
+    var phoneDigits = digitsOf(phoneRaw);
+    if (phoneDigits.length === 10) {
+      params.set('phone_number', phoneDigits);
+      applied = true;
+      els.hintPhone.textContent = '';
+      els.hintPhone.removeAttribute('data-warn');
+    } else if (phoneRaw) {
+      els.hintPhone.textContent = 'Enter all 10 digits to filter by phone.';
+      els.hintPhone.setAttribute('data-warn', 'true');
+    } else {
+      els.hintPhone.textContent = '';
+      els.hintPhone.removeAttribute('data-warn');
+    }
+
+    filtersApplied = applied;
+    return params;
+  }
+
+  // -------------------------------------------------------------------------
+  // Fetch
+  // -------------------------------------------------------------------------
+
+  function describeFailure(response, body) {
+    // The API answers in the `{ data, error }` envelope even when it fails, so
+    // the server's own message is shown rather than a generic one.
+    if (body && body.error && typeof body.error.message === 'string') {
+      return body.error.message;
+    }
+    return 'The API responded with HTTP ' + response.status + ' ' + response.statusText + '.';
+  }
+
+  function load() {
+    var params = collectFilters();
+    var query = params.toString();
+    var url = '/patients' + (query ? '?' + query : '');
+
+    if (inFlight) inFlight.abort();
+    var controller = new AbortController();
+    inFlight = controller;
+
+    els.meta.textContent = 'Loading…';
+
+    fetch(url, {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' }
+    })
+      .then(function (response) {
+        return response
+          .json()
+          .catch(function () { return null; })
+          .then(function (body) { return { response: response, body: body }; });
+      })
+      .then(function (result) {
+        if (controller.signal.aborted) return;
+
+        if (!result.response.ok || !result.body || !Array.isArray(result.body.data)) {
+          showError('Could not load patients', describeFailure(result.response, result.body));
+          els.count.textContent = 'Patient list unavailable';
+          els.meta.textContent = '';
+          els.rows.textContent = '';
+          showPlaceholder(
+            'Nothing to show',
+            'The request to the API did not succeed. The details are in the message above.'
+          );
+          return;
+        }
+
+        clearError();
+        render(result.body.data);
+        els.meta.textContent = 'Updated ' + formatIsoDateTime(new Date().toISOString());
+      })
+      .catch(function (err) {
+        if (err && err.name === 'AbortError') return;
+        // A network-level failure never reaches the envelope, so it is reported
+        // in its own words rather than silently leaving a stale table on screen.
+        showError(
+          'Could not reach the API',
+          'The request to ' + url + ' failed before the server answered' +
+            (err && err.message ? ': ' + err.message : '.') +
+            ' Check that the service is running, then try again.'
+        );
+        els.count.textContent = 'Patient list unavailable';
+        els.meta.textContent = '';
+        els.rows.textContent = '';
+        showPlaceholder('Nothing to show', 'No response was received from the API.');
+      });
+  }
+
+  function scheduleLoad() {
+    if (debounceTimer !== null) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(function () {
+      debounceTimer = null;
+      load();
+    }, DEBOUNCE_MS);
+  }
+
+  // -------------------------------------------------------------------------
+  // Wiring
+  // -------------------------------------------------------------------------
+
+  els.form.addEventListener('submit', function (event) {
+    event.preventDefault();
+    load();
+  });
+
+  [els.lastName, els.phone].forEach(function (input) {
+    input.addEventListener('input', scheduleLoad);
+  });
+
+  // A date picker commits a whole value at once; debouncing it only adds lag.
+  els.dob.addEventListener('change', load);
+
+  els.reset.addEventListener('click', function () {
+    els.lastName.value = '';
+    els.dob.value = '';
+    els.phone.value = '';
+    load();
+  });
+
+  els.retry.addEventListener('click', function () {
+    clearError();
+    load();
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

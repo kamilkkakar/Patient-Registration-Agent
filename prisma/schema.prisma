@@ -1,0 +1,198 @@
+// Prisma schema — Phase 2 data model.
+//
+// Source of truth for every field, type, and constraint below is the data-model
+// table in `voice-ai-agent-challenge.md`. The API contract that this schema
+// backs is specified in `docs/handoff/phase-2.md`.
+//
+// Conventions:
+//   - Columns and tables are snake_case in Postgres via @map / @@map.
+//     The generated Prisma client is camelCase. Routes and services always use
+//     the camelCase names.
+//   - Every timestamp is `timestamptz(3)`. The challenge specifies UTC, and
+//     Prisma's default `timestamp(3)` carries no zone.
+//   - `date_of_birth` is a bare `date`, NOT a timestamp. A DOB has no time and
+//     no zone; storing it as a timestamp shifts it by a day across zones.
+//   - Nullability mirrors the challenge's "Req" column exactly: Req = Yes is
+//     NOT NULL, Req = No is nullable. The single deliberate exception is
+//     `preferred_language` — see the note on that field.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+/// The challenge specifies: Male, Female, Other, Decline to Answer.
+/// "Decline to Answer" contains a space and cannot be a Prisma/Postgres enum
+/// member, so it is stored as DECLINE_TO_ANSWER. The API accepts either form
+/// case-insensitively on input and always returns the display form
+/// ("Decline to Answer"). That mapping lives in one place — see
+/// `src/lib/serialize.ts` in the Phase 2 handoff.
+enum Sex {
+  MALE
+  FEMALE
+  OTHER
+  DECLINE_TO_ANSWER
+
+  @@map("sex")
+}
+
+/// Appointment scheduling is a bonus (challenge §Bonus Challenges) and is
+/// explicitly mock data. Status values are the minimum useful lifecycle.
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+
+  @@map("appointment_status")
+}
+
+// ---------------------------------------------------------------------------
+// Patient — the challenge's standard minimum demographic dataset
+// ---------------------------------------------------------------------------
+
+model Patient {
+  // --- Identity (auto-generated) ---
+  patientId String @id @default(uuid()) @map("patient_id") @db.Uuid
+
+  // --- Required demographics ---
+  // 1-50 chars, alphabetic + hyphens/apostrophes (enforced by Zod; the DB
+  // enforces the length ceiling).
+  firstName String @map("first_name") @db.VarChar(50)
+  lastName  String @map("last_name") @db.VarChar(50)
+
+  // Valid date, not in the future. `date` — no time component, no timezone.
+  dateOfBirth DateTime @map("date_of_birth") @db.Date
+
+  sex Sex @map("sex")
+
+  // Canonical storage form: exactly 10 NANP digits, no punctuation, no country
+  // code (e.g. "5551234567"). Normalization happens before it reaches Prisma.
+  // NOT unique — households share phone numbers. Deduplication matches the
+  // entire demographic row in the service layer, never phone (or name) alone.
+  phoneNumber String @map("phone_number") @db.VarChar(10)
+
+  addressLine1 String @map("address_line_1") @db.VarChar(200)
+  city         String @db.VarChar(100)
+
+  // 2-letter USPS state/territory abbreviation, uppercase.
+  state String @db.VarChar(2)
+
+  // 5-digit ("12345") or ZIP+4 ("12345-6789") — 10 chars max including hyphen.
+  zipCode String @map("zip_code") @db.VarChar(10)
+
+  // --- Optional demographics ---
+  email        String? @db.VarChar(254) // RFC 5321 max address length
+  addressLine2 String? @map("address_line_2") @db.VarChar(200)
+
+  insuranceProvider String? @map("insurance_provider") @db.VarChar(100)
+  insuranceMemberId String? @map("insurance_member_id") @db.VarChar(50)
+
+  // The challenge marks this Req = No but also specifies "Default: English".
+  // Both are honored by making the column NOT NULL with a default: the caller
+  // never has to supply it, and the stored row is never ambiguous.
+  // Trade-off recorded in docs/handoff/phase-2.md § Open decisions.
+  preferredLanguage String @default("English") @map("preferred_language") @db.VarChar(50)
+
+  emergencyContactName String? @map("emergency_contact_name") @db.VarChar(100)
+  // Same canonical 10-digit form as phoneNumber.
+  emergencyContactPhone String? @map("emergency_contact_phone") @db.VarChar(10)
+
+  // --- Lifecycle (auto-managed) ---
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // Soft delete. NULL = live row. DELETE /patients/:id sets this and bumps
+  // updated_at; it never hard-deletes. Every read path filters on
+  // `deletedAt: null` unless explicitly asked not to.
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  // --- Call provenance ---
+  // The Vapi call that created this row, when one did. NULL for every patient
+  // created over REST — most rows in a demo database. This is what lets an
+  // end-of-call transcript be linked back to the patient the call registered
+  // (Vapi contract decision D6); an in-memory map would not survive a restart.
+  // NOT unique: one call can legitimately register two family members.
+  vapiCallId String? @map("vapi_call_id") @db.VarChar(128)
+
+  // --- Relations ---
+  callTranscripts CallTranscript[]
+  appointments    Appointment[]
+
+  // phone_number index backs GET ?phone_number= and returning-caller lookup.
+  // last_name and date_of_birth back the GET /patients query filters.
+  // vapi_call_id backs the end-of-call transcript -> patient lookup.
+  @@index([phoneNumber])
+  @@index([lastName])
+  @@index([dateOfBirth])
+  @@index([deletedAt])
+  @@index([vapiCallId])
+  @@map("patients")
+}
+
+// ---------------------------------------------------------------------------
+// CallTranscript — bonus: store a transcript/summary of each call
+// ---------------------------------------------------------------------------
+
+model CallTranscript {
+  id String @id @default(uuid()) @db.Uuid
+
+  // Nullable by design: a call can end before a patient row exists (caller
+  // hangs up mid-intake, validation never passed, registration abandoned).
+  // We still want the transcript. Linked later if/when the patient is created.
+  patientId String?  @map("patient_id") @db.Uuid
+  patient   Patient? @relation(fields: [patientId], references: [patientId], onDelete: SetNull, onUpdate: Cascade)
+
+  // Vapi's call id. UNIQUE so the end-of-call webhook can be handled with an
+  // upsert — Vapi retries webhooks, and a retry must not create a second row.
+  vapiCallId String @unique @map("vapi_call_id") @db.VarChar(128)
+
+  transcript String? @db.Text
+  summary    String? @db.Text
+
+  // `message.artifact.recordingUrl` from the end-of-call report. Text, not
+  // VarChar: it is a signed storage URL whose length is Vapi's to decide.
+  recordingUrl String? @map("recording_url") @db.Text
+
+  // Call window, as reported by the end-of-call event. Both optional because a
+  // dropped call may not report them.
+  startedAt DateTime? @map("started_at") @db.Timestamptz(3)
+  endedAt   DateTime? @map("ended_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([patientId])
+  @@map("call_transcripts")
+}
+
+// ---------------------------------------------------------------------------
+// Appointment — bonus: mock post-registration scheduling
+// ---------------------------------------------------------------------------
+
+model Appointment {
+  id String @id @default(uuid()) @db.Uuid
+
+  patientId String  @map("patient_id") @db.Uuid
+  patient   Patient @relation(fields: [patientId], references: [patientId], onDelete: Cascade, onUpdate: Cascade)
+
+  // The mock slot the caller accepted.
+  scheduledFor DateTime @map("scheduled_for") @db.Timestamptz(3)
+
+  status AppointmentStatus @default(SCHEDULED)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([patientId])
+  @@index([scheduledFor])
+  @@map("appointments")
+}

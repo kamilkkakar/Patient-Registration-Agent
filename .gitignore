@@ -1,0 +1,58 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+*.swo
+.vscode/
+*.code-workspace
+
+# Prisma local artifacts
+prisma/*.db
+prisma/*.db-journal
+
+# Coding harness + process artifacts (not required to run the voice agent)
+.claude/
+.cursor/
+session-logs/
+docs/
+CLAUDE.md
+AGENTS.md
+voice-ai-agent-challenge.md
+Voice AI Agent Coding Challenge*.pdf
+*.pdf
+
+# Misc local noise
+*.local
+.tmp/
+.cache/
