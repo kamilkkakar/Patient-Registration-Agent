@@ -19,6 +19,7 @@ import type { FastifyInstance } from 'fastify';
 import { NotFoundError, ValidationError } from '../../src/lib/errors.js';
 import {
   bookAppointment,
+  cancelAppointment,
   listUpcomingAppointmentsForPatient,
   rescheduleAppointment,
 } from '../../src/services/appointment.js';
@@ -312,5 +313,85 @@ describe('rescheduleAppointment', () => {
     });
 
     expect(same.scheduledFor.toISOString()).toBe('2026-08-03T09:00:00.000Z');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cancelAppointment — status change, never a deletion
+// ---------------------------------------------------------------------------
+
+describe('cancelAppointment', () => {
+  const NOW = new Date('2026-08-01T00:00:00.000Z');
+
+  it('sets CANCELLED and leaves scheduled_for and created_at intact', async () => {
+    // WHY: the row is kept so the record still shows a booking was made and
+    // given up. Blanking scheduled_for would lose WHICH slot was released, which
+    // is the only thing that makes a cancellation legible after the fact.
+    const patientId = await createPatient({ last_name: testLastName('Cancelkeep') });
+    const booked = await prisma.appointment.create({
+      data: { patientId, scheduledFor: new Date('2026-08-03T09:00:00.000Z') },
+    });
+
+    const cancelled = await cancelAppointment({ appointmentId: booked.id, patientId, now: NOW });
+
+    expect(cancelled.status).toBe('CANCELLED');
+    expect(cancelled.scheduledFor.toISOString()).toBe('2026-08-03T09:00:00.000Z');
+    expect(cancelled.createdAt.toISOString()).toBe(booked.createdAt.toISOString());
+
+    expect(await prisma.appointment.findUnique({ where: { id: booked.id } })).not.toBeNull();
+  });
+
+  it('refuses to cancel the same appointment twice', async () => {
+    // WHY: a second cancel means the model lost track of state. Succeeding
+    // silently would hide that from the caller and from the logs.
+    const patientId = await createPatient({ last_name: testLastName('Canceltwice') });
+    const booked = await prisma.appointment.create({
+      data: { patientId, scheduledFor: new Date('2026-08-03T09:00:00.000Z') },
+    });
+
+    await cancelAppointment({ appointmentId: booked.id, patientId, now: NOW });
+
+    await expect(
+      cancelAppointment({ appointmentId: booked.id, patientId, now: NOW }),
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it("refuses another patient's appointment", async () => {
+    // WHY: same security property as reschedule. A guessed id must not cancel a
+    // stranger's booking.
+    const mine = await createPatient({ last_name: testLastName('Cancelmine') });
+    const theirs = await createPatient({ last_name: testLastName('Canceltheirs') });
+    const theirAppointment = await prisma.appointment.create({
+      data: { patientId: theirs, scheduledFor: new Date('2026-08-03T09:00:00.000Z') },
+    });
+
+    await expect(
+      cancelAppointment({ appointmentId: theirAppointment.id, patientId: mine, now: NOW }),
+    ).rejects.toThrow(NotFoundError);
+
+    const untouched = await prisma.appointment.findUniqueOrThrow({
+      where: { id: theirAppointment.id },
+    });
+    expect(untouched.status).toBe('SCHEDULED');
+  });
+
+  it('leaves a cancelled appointment visible in GET /appointments', async () => {
+    // WHY: DELIBERATE, and it needs a test precisely because it requires NO code
+    // change. `listAllAppointments` filters on the patient's deleted_at and
+    // nothing else. Adding a status filter there would look like a tidy-up and
+    // would quietly destroy the reason for keeping the row at all — a reviewer
+    // could no longer see that a booking was made and then cancelled.
+    const patientId = await createPatient({ last_name: testLastName('Cancelvisible') });
+    const booked = await prisma.appointment.create({
+      data: { patientId, scheduledFor: new Date('2026-08-03T09:00:00.000Z') },
+    });
+
+    await cancelAppointment({ appointmentId: booked.id, patientId, now: NOW });
+
+    const rows = await listAppointments();
+    const mine = rows.find((row) => row['id'] === booked.id);
+
+    expect(mine).toBeDefined();
+    expect(mine?.['status']).toBe('CANCELLED');
   });
 });

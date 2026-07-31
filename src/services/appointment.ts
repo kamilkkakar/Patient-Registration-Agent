@@ -275,6 +275,26 @@ export async function rescheduleAppointment(
 }
 
 /**
+ * Cancel an appointment without deleting it.
+ *
+ * `scheduled_for` is deliberately left alone: the row should still show WHICH
+ * slot was given up, which is the only thing that makes a cancellation legible
+ * afterwards. Nothing in this project hard-deletes — patients get `deleted_at`,
+ * appointments get a status.
+ *
+ * The row stays visible in `GET /appointments`, labelled. Filtering it out there
+ * would destroy the reason for keeping it.
+ */
+export async function cancelAppointment(input: ChangeAppointmentInput): Promise<Appointment> {
+  const existing = await requireChangeableAppointment(input);
+
+  return prisma.appointment.update({
+    where: { id: existing.id },
+    data: { status: 'CANCELLED' },
+  });
+}
+
+/**
  * Future, still-live appointments for one patient, soonest first.
  *
  * Distinct from `listAppointmentsForPatient`, which returns the lot newest-first
