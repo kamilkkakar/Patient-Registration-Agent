@@ -145,6 +145,17 @@ export function findSlotById(slotId: string, now: Date): Slot | null {
 // Persistence
 // ---------------------------------------------------------------------------
 
+/**
+ * The statuses that count as a live booking.
+ *
+ * A WHITELIST, deliberately, rather than a blacklist of CANCELLED. COMPLETED is
+ * equally not-upcoming and equally unreachable today, and a whitelist keeps a
+ * status added later from silently counting as active. The dashboard applies the
+ * same rule in `public/dashboard-helpers.js`, so voice and UI agree on what
+ * "upcoming" means.
+ */
+export const ACTIVE_APPOINTMENT_STATUSES = ['SCHEDULED', 'CONFIRMED'] as const;
+
 export interface BookAppointmentInput {
   patientId: string;
   scheduledFor: Date;
@@ -188,6 +199,34 @@ export async function listAppointmentsForPatient(patientId: string): Promise<App
   return prisma.appointment.findMany({
     where: { patientId },
     orderBy: { scheduledFor: 'desc' },
+  });
+}
+
+/**
+ * Future, still-live appointments for one patient, soonest first.
+ *
+ * Distinct from `listAppointmentsForPatient`, which returns the lot newest-first
+ * for the REST read path. This one answers a different question — "what can the
+ * caller still change?" — so it filters to the active statuses and to slots that
+ * have not happened yet, and orders ASCENDING because the soonest is the one a
+ * caller means when they say "my appointment".
+ *
+ * `now` is injected for the same reason `getAvailableSlots` takes it: a test pins
+ * the answer instead of chasing the clock.
+ */
+export async function listUpcomingAppointmentsForPatient(
+  patientId: string,
+  now: Date,
+): Promise<Appointment[]> {
+  await getPatientById(patientId);
+
+  return prisma.appointment.findMany({
+    where: {
+      patientId,
+      status: { in: [...ACTIVE_APPOINTMENT_STATUSES] },
+      scheduledFor: { gt: now },
+    },
+    orderBy: { scheduledFor: 'asc' },
   });
 }
 

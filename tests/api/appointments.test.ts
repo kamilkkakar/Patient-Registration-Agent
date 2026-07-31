@@ -16,7 +16,11 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { bookAppointment } from '../../src/services/appointment.js';
+import { NotFoundError } from '../../src/lib/errors.js';
+import {
+  bookAppointment,
+  listUpcomingAppointmentsForPatient,
+} from '../../src/services/appointment.js';
 import {
   api,
   assertEnvelope,
@@ -128,5 +132,65 @@ describe('GET /appointments', () => {
     const laterAt = rows.findIndex((row) => row['id'] === later.id);
     expect(soonerAt).toBeGreaterThanOrEqual(0);
     expect(soonerAt).toBeLessThan(laterAt);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listUpcomingAppointmentsForPatient — what Nora reads back to a returning caller
+// ---------------------------------------------------------------------------
+
+describe('listUpcomingAppointmentsForPatient', () => {
+  const NOW = new Date('2026-08-01T00:00:00.000Z');
+
+  it('returns only future, non-cancelled appointments, soonest first', async () => {
+    // WHY: this feeds what Nora reads aloud and the appointment_id she is handed
+    // to change. A cancelled or already-passed booking offered back as "your
+    // appointment" is a wrong answer, not a cosmetic one.
+    const patientId = await createPatient({ last_name: testLastName('Upcomingmix') });
+
+    const past = await prisma.appointment.create({
+      data: { patientId, scheduledFor: new Date('2026-07-20T09:00:00.000Z') },
+    });
+    const cancelled = await prisma.appointment.create({
+      data: { patientId, scheduledFor: new Date('2026-08-05T09:00:00.000Z'), status: 'CANCELLED' },
+    });
+    const later = await prisma.appointment.create({
+      data: { patientId, scheduledFor: new Date('2026-08-10T09:00:00.000Z') },
+    });
+    const sooner = await prisma.appointment.create({
+      data: { patientId, scheduledFor: new Date('2026-08-03T09:00:00.000Z') },
+    });
+
+    const rows = await listUpcomingAppointmentsForPatient(patientId, NOW);
+
+    expect(rows.map((row) => row.id)).toEqual([sooner.id, later.id]);
+    expect(rows.some((row) => row.id === past.id)).toBe(false);
+    expect(rows.some((row) => row.id === cancelled.id)).toBe(false);
+  });
+
+  it('counts CONFIRMED as upcoming, not just SCHEDULED', async () => {
+    // WHY: the filter is a WHITELIST of live statuses. Writing it as "not
+    // CANCELLED" would have been equivalent today and wrong the moment a
+    // confirmation step exists.
+    const patientId = await createPatient({ last_name: testLastName('Upcomingconfirmed') });
+    const confirmed = await prisma.appointment.create({
+      data: { patientId, scheduledFor: new Date('2026-08-04T09:00:00.000Z'), status: 'CONFIRMED' },
+    });
+
+    const rows = await listUpcomingAppointmentsForPatient(patientId, NOW);
+
+    expect(rows.map((row) => row.id)).toEqual([confirmed.id]);
+  });
+
+  it('throws for a soft-deleted patient rather than listing their appointments', async () => {
+    // WHY: soft-delete is invisible on every read path. A tombstoned patient must
+    // not become reachable through the appointment side door.
+    const patientId = await createPatient({ last_name: testLastName('Upcomingdeleted') });
+    await prisma.appointment.create({
+      data: { patientId, scheduledFor: new Date('2026-09-01T09:00:00.000Z') },
+    });
+    expect((await api(app).delete(`/patients/${patientId}`)).status).toBe(200);
+
+    await expect(listUpcomingAppointmentsForPatient(patientId, NOW)).rejects.toThrow(NotFoundError);
   });
 });
