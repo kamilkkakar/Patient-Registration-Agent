@@ -80,6 +80,44 @@ const assistant = {
   // bump to 1.1; it reads faster and more robotic. Fallback candidates below
   // are only used if Savannah is rejected on first create.
   voice: { provider: 'vapi', voiceId: 'Savannah', speed: 1.0 },
+  // Phone / ZIP / DOB are digit-heavy. nova-3 + numerals beats a latency-tuned
+  // Flux EOT that ends the turn after a single spoken digit.
+  transcriber: {
+    provider: 'deepgram',
+    model: 'nova-3',
+    language: 'en',
+    numerals: true,
+    keywords: [
+      'email',
+      'gmail',
+      'yahoo',
+      'outlook',
+      'hotmail',
+      'street',
+      'avenue',
+      'drive',
+      'kansas',
+      'texas',
+      'california',
+    ],
+  },
+  // Prefer patience over snappy turn-taking: cutting mid-ZIP / mid-phone is worse
+  // than 500ms of extra wait. onNumberSeconds is the important knob.
+  startSpeakingPlan: {
+    waitSeconds: 0.55,
+    transcriptionEndpointingPlan: {
+      onPunctuationSeconds: 0.3,
+      onNoPunctuationSeconds: 1.7,
+      onNumberSeconds: 1.5,
+    },
+  },
+  // Let real words barge in; ignore tiny noises. Brief pause after an interrupt
+  // so Nora does not immediately talk over the caller again.
+  stopSpeakingPlan: {
+    numWords: 1,
+    voiceSeconds: 0.25,
+    backoffSeconds: 1.2,
+  },
   // Explicit, per the pinned contract: any array REPLACES the defaults wholesale.
   // conversation-update and transcript are omitted deliberately - huge volume,
   // and nothing in this build consumes live turns.
@@ -97,6 +135,7 @@ const assistant = {
   maxDurationSeconds: 600,
   silenceTimeoutSeconds: 30,
   backgroundSound: 'off',
+  firstMessageMode: 'assistant-speaks-first',
 };
 
 // Preferred voice is Savannah. Remaining names are create-time fallbacks only
