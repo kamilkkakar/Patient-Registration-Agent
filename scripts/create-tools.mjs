@@ -66,7 +66,12 @@ const patientProps = {
   first_name: { type: 'string', description: `Caller's first name. ${SPOKEN} Spelled-out letters are fine.` },
   last_name: { type: 'string', description: `Caller's last name. ${SPOKEN} Spelled-out letters are fine.` },
   date_of_birth: { type: 'string', description: `Date of birth. ${SPOKEN} e.g. "February fifteenth ninety two".` },
-  sex: { type: 'string', enum: ['Male', 'Female', 'Other', 'Decline to Answer'], description: 'One of the four options.' },
+  sex: {
+    type: 'string',
+    enum: ['Male', 'Female', 'Other', 'Decline to Answer'],
+    description:
+      'Map the caller to one of the four options. "ma\'am"/"woman" → Female; "sir"/"guy" → Male. Prefer the enum label.',
+  },
   phone_number: { type: 'string', description: `Phone number. ${SPOKEN} e.g. "nine oh two, five five five, oh one four seven".` },
   address_line_1: { type: 'string', description: 'Street address including number and street name.' },
   address_line_2: { type: 'string', description: 'Apartment, suite or unit. Omit entirely if not given.' },

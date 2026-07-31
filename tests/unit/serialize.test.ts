@@ -59,9 +59,22 @@ describe('sex enum mapping', () => {
     expect(parseSex('  decline_to_answer  ')).toBe('DECLINE_TO_ANSWER');
   });
 
+  it('maps spoken aliases so voice slips still save', () => {
+    // WHY: live call STT/model may pass "ma'am" / "sir" instead of the enum label.
+    expect(parseSex("ma'am")).toBe('FEMALE');
+    expect(parseSex('maam')).toBe('FEMALE');
+    expect(parseSex('madam')).toBe('FEMALE');
+    expect(parseSex('sir')).toBe('MALE');
+    expect(parseSex('guy')).toBe('MALE');
+    expect(parseSex('nonbinary')).toBe('OTHER');
+    expect(parseSex('rather not say')).toBe('DECLINE_TO_ANSWER');
+  });
+
   it('rejects anything else', () => {
     expect(parseSex('Yes')).toBeNull();
     expect(parseSex('')).toBeNull();
+    // Do NOT map "mail" → Male; that is how "ma'am" was mis-handled in call 4.
+    expect(parseSex('mail')).toBeNull();
   });
 
   it('always returns the display form', () => {

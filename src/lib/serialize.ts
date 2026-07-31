@@ -53,11 +53,40 @@ const SEX_STORAGE = new Set<string>(SEX_VALUES);
  * accepts "Decline to Answer", "decline to answer", "DECLINE_TO_ANSWER" and
  * "decline_to_answer" alike (handoff § 5).
  *
- * Returns null when the input is not one of the four values.
+ * Also accepts a small set of spoken aliases the voice agent may pass through
+ * ("ma'am" → FEMALE, "sir" → MALE) so a listening slip does not 422 a save.
+ *
+ * Returns null when the input is not one of the four values (or a known alias).
  */
+const SEX_SPOKEN_ALIASES: Record<string, SexValue> = {
+  MALE: 'MALE',
+  FEMALE: 'FEMALE',
+  OTHER: 'OTHER',
+  DECLINE_TO_ANSWER: 'DECLINE_TO_ANSWER',
+  // Spoken / colloquial — voice path only; REST clients still use the four labels.
+  SIR: 'MALE',
+  MAN: 'MALE',
+  GUY: 'MALE',
+  GENTLEMAN: 'MALE',
+  BOY: 'MALE',
+  "MA'AM": 'FEMALE',
+  MAAM: 'FEMALE',
+  MADAM: 'FEMALE',
+  WOMAN: 'FEMALE',
+  LADY: 'FEMALE',
+  GIRL: 'FEMALE',
+  NONBINARY: 'OTHER',
+  'NON-BINARY': 'OTHER',
+  PREFER_NOT_TO_SAY: 'DECLINE_TO_ANSWER',
+  RATHER_NOT_SAY: 'DECLINE_TO_ANSWER',
+};
+
 export function parseSex(input: string): SexValue | null {
   const candidate = input.trim().toUpperCase().replace(/\s+/g, '_');
-  return SEX_STORAGE.has(candidate) ? (candidate as SexValue) : null;
+  if (SEX_STORAGE.has(candidate)) return candidate as SexValue;
+  // Strip apostrophes for ma'am → MAAM matching after the underscore collapse.
+  const aliasKey = candidate.replace(/'/g, '');
+  return SEX_SPOKEN_ALIASES[candidate] ?? SEX_SPOKEN_ALIASES[aliasKey] ?? null;
 }
 
 /** Storage form -> the display form the API always returns. */
