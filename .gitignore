@@ -55,6 +55,7 @@ Voice AI Agent Coding Challenge*.pdf
 # Misc local noise
 *.local
 .tmp/
+.tmp-*
 .cache/
 REQUIRED_CONTENTS.md
 SUBMISSION.md
