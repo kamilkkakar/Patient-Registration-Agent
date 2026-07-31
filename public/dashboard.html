@@ -391,6 +391,7 @@
           <th scope="col">Date of birth</th>
           <th scope="col">Sex</th>
           <th scope="col">Phone</th>
+          <th scope="col">Email</th>
           <th scope="col">City / State</th>
           <th scope="col">ZIP</th>
           <th scope="col">Registered</th>
@@ -520,7 +521,7 @@
   function buildDetailRow(patient) {
     var tr = el('tr', 'detail');
     var td = el('td');
-    td.colSpan = 7;
+    td.colSpan = 8;
 
     var grid = el('div', 'detail-grid');
 
@@ -584,6 +585,7 @@
     tr.appendChild(cell('Date of birth', patient.date_of_birth, 'num'));
     tr.appendChild(cell('Sex', patient.sex));
     tr.appendChild(cell('Phone', formatPhone(patient.phone_number), 'num'));
+    tr.appendChild(cell('Email', patient.email || '—'));
     tr.appendChild(cell('City / State', patient.city + ', ' + patient.state));
     tr.appendChild(cell('ZIP', patient.zip_code, 'num'));
     tr.appendChild(cell('Registered', formatIsoDate(patient.created_at), 'num'));
