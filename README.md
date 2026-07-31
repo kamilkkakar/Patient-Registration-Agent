@@ -2,7 +2,7 @@
 
 Dial a real U.S. number. Speak naturally. Walk away with a validated patient record in Postgres — queryable over REST and visible on a live dashboard.
 
-**Nora** (Savannah voice, GPT-4.1 mini) is a warm intake coordinator: she greets you clearly, collects demographics including email, confirms them out loud, handles corrections, and only then saves. Optional insurance, emergency contact, and language are offered once — never forced.
+**Nora** is a warm intake coordinator: she greets you clearly, collects demographics, confirms them out loud, handles corrections, and only then saves. Optional insurance, emergency contact, and language are offered once — never forced.
 
 ---
 
