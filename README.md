@@ -21,7 +21,7 @@ curl https://api-production-10c0.up.railway.app/patients
 
 Call the number, finish registration, then refresh the dashboard — your row should be there.
 
-Voice path verified end-to-end on a live inbound call (lookup → create → hangup, with transcript linked). See [`SUBMISSION.md`](SUBMISSION.md) for the review pack.
+Voice path verified end-to-end on a live inbound call (lookup → create → hangup, with transcript linked).
 
 ---
 
