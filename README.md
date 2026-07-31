@@ -1,8 +1,8 @@
-# Call Voice Agent for Patient Registration
+# Patient Registration Agent
 
 Dial a real U.S. number. Speak naturally. Walk away with a validated patient record in Postgres — queryable over REST and visible on a live dashboard.
 
-**Nora** answers as an intake coordinator: she collects demographics, confirms them out loud, handles corrections, and only then saves. Optional insurance, emergency contact, and language are offered once — never forced.
+**Nora** (Savannah voice, GPT-4.1 mini) is a warm intake coordinator: she greets you clearly, collects demographics including email, confirms them out loud, handles corrections, and only then saves. Optional insurance, emergency contact, and language are offered once — never forced.
 
 ---
 
@@ -28,6 +28,7 @@ Voice path verified end-to-end on a live inbound call (lookup → create → han
 ## What it does
 
 - **Natural voice intake** over a real PSTN number (not a rigid IVR menu)
+- **Friendly registration flow** — clear hello, light-hearted tone, email asked on every call (skippable)
 - **Confirm-before-save** with field-specific re-prompts when data is invalid
 - **Spoken-input normalization** — *“nine oh two…”* → `9025550147`, *“February fifteenth, ninety two”* → `02/15/1992`
 - **Full REST API** for list / get / create / update / soft-delete, with consistent JSON envelopes
@@ -138,8 +139,8 @@ Spoken forms are normalized in `src/normalize/` (covered by unit tests):
 **Needs:** Node ≥ 20, Docker, a [Vapi](https://vapi.ai) account (for the phone path).
 
 ```bash
-git clone https://github.com/kamilkkakar/Call-Voice-Agent-for-Patient-Registration.git
-cd Call-Voice-Agent-for-Patient-Registration
+git clone https://github.com/kamilkkakar/Patient-Registration-Agent.git
+cd Patient-Registration-Agent
 
 npm ci --ignore-scripts
 cp .env.example .env          # fill in values (never commit .env)

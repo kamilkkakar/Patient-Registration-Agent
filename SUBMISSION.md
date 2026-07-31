@@ -1,10 +1,10 @@
-# Submission pack — Call Voice Agent for Patient Registration
+# Submission pack — Patient Registration Agent
 
 ## Links
 
 | Item | Value |
 | --- | --- |
-| **Repository** | https://github.com/kamilkkakar/Call-Voice-Agent-for-Patient-Registration |
+| **Repository** | https://github.com/kamilkkakar/Patient-Registration-Agent |
 | **Phone number** | **+1 (662) 443-8181** |
 | **API base URL** | https://api-production-10c0.up.railway.app |
 | **Dashboard** | https://api-production-10c0.up.railway.app/dashboard |
@@ -33,11 +33,12 @@ curl https://api-production-10c0.up.railway.app/patients
 
 ## Stack
 
-Vapi + GPT-4o · Fastify/TypeScript · Postgres/Prisma · Railway · Vitest.
+Vapi + GPT-4.1 mini · Savannah voice · Fastify/TypeScript · Postgres/Prisma · Railway · Vitest.
 
 ## Notes for reviewers
 
 - Do **not** use real patient data (demo / assessment only).
 - REST is unauthenticated by design for this demo; `/vapi/*` is secret-protected.
 - Full-row dedupe: identical demographics reuse the existing record; shared phones can still create separate patients.
+- Registration asks for email after address (caller may skip).
 - System prompt: `prompts/intake-coordinator.md`.

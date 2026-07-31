@@ -68,18 +68,19 @@ async function api(method, path, body) {
 
 const assistant = {
   name: 'patient-intake-coordinator',
-  firstMessage: `Thanks for calling ${CLINIC_NAME}, this is ${AGENT_NAME}. Are you calling to register as a new patient?`,
+  firstMessage: `Hello! Thanks for calling ${CLINIC_NAME}, this is ${AGENT_NAME}. I'd love to help you get registered as a new patient — is that what you're calling about today?`,
   model: {
     provider: 'openai',
-    model: 'gpt-4o',
+    model: 'gpt-4.1-mini',
     // Low temperature: this is a data-collection task. Creativity here shows up
     // as invented field values and drifting off-script, not as better phrasing.
     temperature: 0.3,
     messages: [{ role: 'system', content: systemPrompt }],
   },
-  // Filled in by the fallback loop below - Vapi is retiring its legacy voice set
-  // and rejects those at creation time, so the supported one is found empirically.
-  voice: { provider: 'vapi', voiceId: 'PLACEHOLDER' },
+  // Savannah is the chosen voice (warm, natural). speed 1.0 = normal — do not
+  // bump to 1.1; it reads faster and more robotic. Fallback candidates below
+  // are only used if Savannah is rejected on first create.
+  voice: { provider: 'vapi', voiceId: 'Savannah', speed: 1.0 },
   // Explicit, per the pinned contract: any array REPLACES the defaults wholesale.
   // conversation-update and transcript are omitted deliberately - huge volume,
   // and nothing in this build consumes live turns.
@@ -89,7 +90,7 @@ const assistant = {
   // care", which matched nothing, so the line stayed open through two more turns
   // until it happened to say "Goodbye". The caller had already said "bye bye".
   endCallFunctionEnabled: true,
-  endCallMessage: `Thanks for calling ${CLINIC_NAME}. Goodbye.`,
+  endCallMessage: `Thanks so much for calling ${CLINIC_NAME} — take care. Goodbye!`,
   // Kept as a backstop for when the model narrates a farewell instead of calling
   // the hangup function. Lowercase substring matches.
   endCallPhrases: ['goodbye', 'good bye', 'bye now', 'bye bye', 'take care now', 'have a great day'],
@@ -99,11 +100,10 @@ const assistant = {
   backgroundSound: 'off',
 };
 
-// Warm, natural-sounding candidates first; Elliot last because the account's
-// existing default assistant already uses it, so it is proven to be accepted.
-// Vapi rejects its retired legacy voice set at creation time, so the supported
-// one is found empirically rather than assumed.
-const VOICE_CANDIDATES = ['Savannah', 'Hana', 'Lily', 'Kylie', 'Neha', 'Elliot'];
+// Preferred voice is Savannah. Remaining names are create-time fallbacks only
+// (Vapi rejects its retired legacy set at creation time).
+const VOICE_PREFERRED = 'Savannah';
+const VOICE_CANDIDATES = [VOICE_PREFERRED, 'Hana', 'Lily', 'Kylie', 'Neha', 'Elliot'];
 
 // Re-running must UPDATE the assistant the phone number already points at.
 // Creating a second one would leave the number wired to the stale config while
@@ -133,14 +133,15 @@ if (EXISTING_ID) {
     model: { ...assistant.model, ...(hasTools ? { toolIds: priorToolIds } : {}) },
     ...(current.json.server ? { server: current.json.server } : {}),
   };
-  merged.voice.voiceId = current.json.voice?.voiceId ?? VOICE_CANDIDATES[0];
+  // Always pin Savannah + normal speed on update (do not inherit a faster speed).
+  merged.voice = { provider: 'vapi', voiceId: VOICE_PREFERRED, speed: 1.0 };
 
   const patched = await api('PATCH', `/assistant/${EXISTING_ID}`, merged);
   if (patched.status !== 200) {
     console.log('PATCH failed:', patched.status, JSON.stringify(patched.json).slice(0, 600));
     process.exit(1);
   }
-  console.log(`voice kept: ${patched.json.voice?.voiceId}`);
+  console.log(`voice: ${patched.json.voice?.voiceId} | speed: ${patched.json.voice?.speed}`);
 
   // Re-READ rather than trusting the PATCH response. A 200 here has already
   // proven capable of hiding a broken assistant.
