@@ -16,10 +16,11 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { NotFoundError } from '../../src/lib/errors.js';
+import { NotFoundError, ValidationError } from '../../src/lib/errors.js';
 import {
   bookAppointment,
   listUpcomingAppointmentsForPatient,
+  rescheduleAppointment,
 } from '../../src/services/appointment.js';
 import {
   api,
@@ -192,5 +193,124 @@ describe('listUpcomingAppointmentsForPatient', () => {
     expect((await api(app).delete(`/patients/${patientId}`)).status).toBe(200);
 
     await expect(listUpcomingAppointmentsForPatient(patientId, NOW)).rejects.toThrow(NotFoundError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// rescheduleAppointment — move an existing booking in place
+// ---------------------------------------------------------------------------
+
+describe('rescheduleAppointment', () => {
+  const NOW = new Date('2026-08-01T00:00:00.000Z');
+
+  it('moves scheduled_for but never created_at, and keeps the row SCHEDULED', async () => {
+    // WHY: created_at is WHEN THE CALLER BOOKED; scheduled_for is THE
+    // APPOINTMENT. They are different facts and rescheduling changes only the
+    // second. Overwriting created_at would lose when the caller actually rang in.
+    const patientId = await createPatient({ last_name: testLastName('Reschedmove') });
+    const original = await prisma.appointment.create({
+      data: { patientId, scheduledFor: new Date('2026-08-03T09:00:00.000Z') },
+    });
+
+    const moved = await rescheduleAppointment({
+      appointmentId: original.id,
+      patientId,
+      scheduledFor: new Date('2026-08-05T09:00:00.000Z'),
+      now: NOW,
+    });
+
+    expect(moved.id).toBe(original.id);
+    expect(moved.scheduledFor.toISOString()).toBe('2026-08-05T09:00:00.000Z');
+    expect(moved.createdAt.toISOString()).toBe(original.createdAt.toISOString());
+    expect(moved.status).toBe('SCHEDULED');
+  });
+
+  it("refuses another patient's appointment the same way it refuses a missing one", async () => {
+    // WHY: this is the security property, not a nicety. Distinguishing "not
+    // yours" from "no such row" would let a caller probe whether an arbitrary
+    // appointment id exists. Appointment ids reach us from a model on a phone
+    // call, so the scope has to be enforced in the query.
+    const mine = await createPatient({ last_name: testLastName('Reschedmine') });
+    const theirs = await createPatient({ last_name: testLastName('Reschedtheirs') });
+    const theirAppointment = await prisma.appointment.create({
+      data: { patientId: theirs, scheduledFor: new Date('2026-08-03T09:00:00.000Z') },
+    });
+
+    await expect(
+      rescheduleAppointment({
+        appointmentId: theirAppointment.id,
+        patientId: mine,
+        scheduledFor: new Date('2026-08-05T09:00:00.000Z'),
+        now: NOW,
+      }),
+    ).rejects.toThrow(NotFoundError);
+
+    await expect(
+      rescheduleAppointment({
+        appointmentId: '3fa85f64-5717-4562-b3fc-2c963f66afa6',
+        patientId: mine,
+        scheduledFor: new Date('2026-08-05T09:00:00.000Z'),
+        now: NOW,
+      }),
+    ).rejects.toThrow(NotFoundError);
+
+    const untouched = await prisma.appointment.findUniqueOrThrow({
+      where: { id: theirAppointment.id },
+    });
+    expect(untouched.scheduledFor.toISOString()).toBe('2026-08-03T09:00:00.000Z');
+  });
+
+  it('refuses a cancelled appointment', async () => {
+    // WHY: a cancelled booking is finished. Moving its date would resurrect a
+    // slot the caller already gave up.
+    const patientId = await createPatient({ last_name: testLastName('Reschedcancelled') });
+    const cancelled = await prisma.appointment.create({
+      data: { patientId, scheduledFor: new Date('2026-08-03T09:00:00.000Z'), status: 'CANCELLED' },
+    });
+
+    await expect(
+      rescheduleAppointment({
+        appointmentId: cancelled.id,
+        patientId,
+        scheduledFor: new Date('2026-08-05T09:00:00.000Z'),
+        now: NOW,
+      }),
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it('refuses an appointment that has already passed', async () => {
+    // WHY: you cannot move yesterday.
+    const patientId = await createPatient({ last_name: testLastName('Reschedpast') });
+    const past = await prisma.appointment.create({
+      data: { patientId, scheduledFor: new Date('2026-07-20T09:00:00.000Z') },
+    });
+
+    await expect(
+      rescheduleAppointment({
+        appointmentId: past.id,
+        patientId,
+        scheduledFor: new Date('2026-08-05T09:00:00.000Z'),
+        now: NOW,
+      }),
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it('accepts rescheduling to the slot already held', async () => {
+    // WHY: a caller confirming the time they already have has not made a
+    // mistake. Erroring here would produce a confusing re-prompt for a harmless
+    // request.
+    const patientId = await createPatient({ last_name: testLastName('Reschedsame') });
+    const existing = await prisma.appointment.create({
+      data: { patientId, scheduledFor: new Date('2026-08-03T09:00:00.000Z') },
+    });
+
+    const same = await rescheduleAppointment({
+      appointmentId: existing.id,
+      patientId,
+      scheduledFor: new Date('2026-08-03T09:00:00.000Z'),
+      now: NOW,
+    });
+
+    expect(same.scheduledFor.toISOString()).toBe('2026-08-03T09:00:00.000Z');
   });
 });

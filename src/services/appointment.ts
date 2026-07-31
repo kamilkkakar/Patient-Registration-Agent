@@ -12,6 +12,7 @@
 // instead of chasing the clock.
 
 import type { Appointment } from '@prisma/client';
+import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { getPatientById } from './patient.js';
 
@@ -199,6 +200,77 @@ export async function listAppointmentsForPatient(patientId: string): Promise<App
   return prisma.appointment.findMany({
     where: { patientId },
     orderBy: { scheduledFor: 'desc' },
+  });
+}
+
+export interface ChangeAppointmentInput {
+  appointmentId: string;
+  patientId: string;
+  /** Injected so a test pins "past" instead of chasing the clock. */
+  now: Date;
+}
+
+/**
+ * Load an appointment this patient is allowed to change, or throw.
+ *
+ * The query is scoped to BOTH ids on purpose, and that is not belt-and-braces.
+ * Appointment ids reach this layer from a language model on a phone call; an id
+ * it invented, misheard, or carried over from earlier in the conversation would
+ * otherwise modify a stranger's booking. Ownership is enforced in the WHERE
+ * clause rather than checked afterwards, so there is no window between the read
+ * and the decision.
+ *
+ * "No such appointment" and "not yours" throw the SAME NotFoundError with the
+ * same message. Telling them apart would turn this into an oracle for whether an
+ * arbitrary appointment id exists.
+ */
+async function requireChangeableAppointment(input: ChangeAppointmentInput): Promise<Appointment> {
+  // Throws for unknown AND soft-deleted, so a tombstoned patient's appointments
+  // are unreachable here exactly as they are on every other read path.
+  await getPatientById(input.patientId);
+
+  const appointment = await prisma.appointment.findFirst({
+    where: { id: input.appointmentId, patientId: input.patientId },
+  });
+
+  if (appointment === null) {
+    throw new NotFoundError('No appointment with that id exists for this patient.');
+  }
+
+  if (appointment.status === 'CANCELLED') {
+    throw new ValidationError('That appointment was already cancelled.', [
+      { field: 'appointment_id', message: 'Already cancelled.' },
+    ]);
+  }
+
+  if (appointment.scheduledFor <= input.now) {
+    throw new ValidationError('That appointment has already passed.', [
+      { field: 'appointment_id', message: 'Already passed.' },
+    ]);
+  }
+
+  return appointment;
+}
+
+/**
+ * Move an existing appointment to a new slot.
+ *
+ * In place: one appointment, one row. `created_at` is deliberately untouched, so
+ * the record still says when the caller rang in to book; `updated_at` moves on
+ * its own via @updatedAt.
+ *
+ * Rescheduling to the slot already held is allowed and is a no-op write. A
+ * caller confirming the time they already have has not made a mistake, and
+ * refusing it would produce a confusing re-prompt for a harmless request.
+ */
+export async function rescheduleAppointment(
+  input: ChangeAppointmentInput & { scheduledFor: Date },
+): Promise<Appointment> {
+  const existing = await requireChangeableAppointment(input);
+
+  return prisma.appointment.update({
+    where: { id: existing.id },
+    data: { scheduledFor: input.scheduledFor },
   });
 }
 
