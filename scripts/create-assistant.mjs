@@ -133,9 +133,20 @@ const assistant = {
   endCallPhrases: ['goodbye', 'good bye', 'bye now', 'bye bye', 'take care now', 'have a great day'],
   // A registration call that runs past 10 minutes has gone wrong; cap the spend.
   maxDurationSeconds: 600,
-  silenceTimeoutSeconds: 30,
+  silenceTimeoutSeconds: 45,
   backgroundSound: 'off',
   firstMessageMode: 'assistant-speaks-first',
+  // Warm check-ins if the line goes quiet — timeout high enough not to barge into
+  // a slow ZIP / phone digit sequence.
+  messagePlan: {
+    idleMessages: [
+      "I'm still here whenever you're ready.",
+      'Take your time — I can wait.',
+      'Are you still on the line?',
+    ],
+    idleMessageMaxSpokenCount: 2,
+    idleTimeoutSeconds: 18,
+  },
 };
 
 // Preferred voice is Savannah. Remaining names are create-time fallbacks only
