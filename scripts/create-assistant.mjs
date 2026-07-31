@@ -68,13 +68,12 @@ async function api(method, path, body) {
 
 const assistant = {
   name: 'patient-intake-coordinator',
-  firstMessage: `Hello! Thanks for calling ${CLINIC_NAME}, this is ${AGENT_NAME}. I'd love to help you get registered as a new patient — is that what you're calling about today?`,
+  firstMessage: `Hello! Thanks for calling ${CLINIC_NAME} — this is ${AGENT_NAME}. I'd love to help get you registered as a new patient. Is that what you're calling about today?`,
   model: {
     provider: 'openai',
     model: 'gpt-4.1-mini',
-    // Low temperature: this is a data-collection task. Creativity here shows up
-    // as invented field values and drifting off-script, not as better phrasing.
-    temperature: 0.3,
+    // Slightly warmer than pure data-entry; still low enough to avoid inventing fields.
+    temperature: 0.45,
     messages: [{ role: 'system', content: systemPrompt }],
   },
   // Savannah is the chosen voice (warm, natural). speed 1.0 = normal — do not
