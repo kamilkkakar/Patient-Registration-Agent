@@ -66,7 +66,7 @@ Voice and REST share the service layer but normalize differently on purpose: a R
 | Layer | Choice | Why |
 | --- | --- | --- |
 | Telephony + voice | **Vapi** | STT, TTS, turn-taking, barge-in without building a media stack |
-| LLM | **GPT-4o** (via Vapi) | Strong enough for corrections and confirmations; latency-aware |
+| LLM | **GPT-4.1 mini** (via Vapi) | Fast / low-latency intake; strong enough for corrections and confirmations |
 | Backend | **Node.js · TypeScript · Fastify** | One process for REST + webhooks |
 | Database | **Postgres · Prisma** | Real types (`DATE` for DOB, enums, soft-delete) |
 | Hosting | **Railway** | App + DB together; no free-tier cold starts mid-call |
@@ -177,8 +177,6 @@ npm run db:up
 npm test
 npm run typecheck
 ```
-
-Repo contents inventory: [`REQUIRED_CONTENTS.md`](REQUIRED_CONTENTS.md).
 
 ---
 
