@@ -15,11 +15,13 @@ import type { ZodIssue } from 'zod';
 import { ok, zodIssuesToDetails } from '../lib/envelope.js';
 import { BadRequestError, ValidationError } from '../lib/errors.js';
 import {
+  toAppointmentResponseList,
   toCallTranscriptResponseList,
   toPatientResponse,
   toPatientResponseList,
   type PatientResponse,
 } from '../lib/serialize.js';
+import * as appointmentService from '../services/appointment.js';
 import * as callTranscriptService from '../services/call-transcript.js';
 import * as patientService from '../services/patient.js';
 import {
@@ -111,6 +113,24 @@ export async function patientRoutes(app: FastifyInstance): Promise<void> {
     // Zero transcripts is a successful empty collection — a patient registered
     // over REST has never had a call.
     reply.code(200).send(ok(toCallTranscriptResponseList(transcripts)));
+  });
+
+  // -------------------------------------------------------------------------
+  // GET /patients/:id/appointments — read-only view of the mock appointments
+  // booked on this patient (bonus: appointment scheduling).
+  //
+  // Same observable contract as the transcripts route — unknown id and
+  // soft-deleted id both 404 — but the check is NOT repeated here: it lives
+  // inside `listAppointmentsForPatient`, because `bookAppointment` needs the
+  // identical rule and cannot delegate it upwards. One rule, one place.
+  // -------------------------------------------------------------------------
+  app.get('/patients/:id/appointments', async (request: FastifyRequest, reply: FastifyReply) => {
+    const patientId = parsePatientId(request);
+    const appointments = await appointmentService.listAppointmentsForPatient(patientId);
+
+    // Zero appointments is a successful empty collection — scheduling is a
+    // bonus branch most callers never reach.
+    reply.code(200).send(ok(toAppointmentResponseList(appointments)));
   });
 
   // -------------------------------------------------------------------------

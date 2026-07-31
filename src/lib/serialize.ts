@@ -23,7 +23,7 @@
 // `formatDob` is the shared half and has exactly ONE implementation — this one.
 // `src/normalize/date.ts` re-exports it rather than keeping a copy.
 
-import type { CallTranscript, Patient } from '@prisma/client';
+import type { Appointment, CallTranscript, Patient } from '@prisma/client';
 
 // ---------------------------------------------------------------------------
 // sex enum
@@ -298,4 +298,40 @@ export function toCallTranscriptResponseList(
   rows: readonly CallTranscript[],
 ): CallTranscriptResponse[] {
   return rows.map(toCallTranscriptResponse);
+}
+
+// ---------------------------------------------------------------------------
+// appointment -> wire
+// ---------------------------------------------------------------------------
+
+/**
+ * The shape returned by `GET /patients/:id/appointments`. Same rules as above:
+ * snake_case keys, a FIXED key set, timestamps ISO 8601 UTC.
+ *
+ * `status` is emitted in its STORAGE form ("SCHEDULED"). Unlike `sex`, the
+ * challenge specifies no display labels for it, and inventing a second display
+ * mapping would create a second thing to keep in sync for no caller benefit.
+ */
+export interface AppointmentResponse {
+  id: string;
+  patient_id: string;
+  scheduled_for: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export function toAppointmentResponse(row: Appointment): AppointmentResponse {
+  return {
+    id: row.id,
+    patient_id: row.patientId,
+    scheduled_for: row.scheduledFor.toISOString(),
+    status: row.status,
+    created_at: row.createdAt.toISOString(),
+    updated_at: row.updatedAt.toISOString(),
+  };
+}
+
+export function toAppointmentResponseList(rows: readonly Appointment[]): AppointmentResponse[] {
+  return rows.map(toAppointmentResponse);
 }

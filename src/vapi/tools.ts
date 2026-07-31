@@ -1,4 +1,4 @@
-// The three Vapi tool handlers.
+// The Vapi tool handlers.
 //
 // Each returns a ToolOutcome — never an HTTP status, never a thrown error that
 // could escape to the global handler and become a 500. § G5 of the pinned
@@ -27,7 +27,12 @@ import { zodIssuesToDetails } from '../lib/envelope.js';
 import { NotFoundError } from '../lib/errors.js';
 import { formatDob } from '../lib/serialize.js';
 import { normalizePhone } from '../normalize/index.js';
+import * as appointmentService from '../services/appointment.js';
 import * as patientService from '../services/patient.js';
+import {
+  bookAppointmentSchema,
+  getAppointmentSlotsSchema,
+} from '../validation/appointment.js';
 import {
   createPatientSchema,
   toCreateInput,
@@ -246,6 +251,96 @@ async function updatePatient(args: ToolCallArgs): Promise<ToolOutcome> {
 }
 
 // ---------------------------------------------------------------------------
+// get_appointment_slots / book_appointment — bonus: mock scheduling
+// ---------------------------------------------------------------------------
+
+/** Both appointment handlers fail on `patient_id` identically. */
+const PATIENT_ID_INVALID =
+  'patient_id is missing or is not a valid id; register the caller or look them up by phone number first.';
+const PATIENT_ID_UNKNOWN =
+  'No patient exists with that patient_id; look the patient up by phone number again.';
+const SLOT_ID_UNKNOWN =
+  'slot_id is not one of the times currently on offer; call get_appointment_slots again and read the caller the options it returns.';
+
+/**
+ * Pick the re-prompt for an appointment tool's arguments.
+ *
+ * The two named fields get purpose-written instructions: `issuesToError`'s
+ * generic "…then save" tail is wrong here, nothing is being saved, and a caller
+ * cannot be asked to repeat a slot id they never said. Anything else is
+ * `.strict()` rejecting an argument these tools do not accept — a model error,
+ * and `issuesToError` names the offending key exactly.
+ */
+function appointmentArgsError(issues: readonly z.ZodIssue[]): string {
+  const fields = new Set(zodIssuesToDetails(issues).map((detail) => detail.field));
+
+  if (fields.has('slot_id')) return SLOT_ID_UNKNOWN;
+  if (fields.has('patient_id')) return PATIENT_ID_INVALID;
+  return issuesToError(issues);
+}
+
+async function getAppointmentSlots(args: ToolCallArgs): Promise<ToolOutcome> {
+  const parsed = getAppointmentSlotsSchema.safeParse(args);
+
+  if (!parsed.success) {
+    return fieldFailure(appointmentArgsError(parsed.error.issues));
+  }
+
+  try {
+    // Reading the patient first is the whole reason this tool takes an id:
+    // offering times to a record that does not exist only defers the failure to
+    // book_appointment, after the caller has already chosen one.
+    await patientService.getPatientById(parsed.data.patient_id);
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      return fieldFailure(PATIENT_ID_UNKNOWN);
+    }
+    return infraFailure('The appointment times could not be read because the record store is unavailable.');
+  }
+
+  // Pure, so nothing below can throw. § G14: the result carries three slots and
+  // their ids and nothing else — no patient name, no confirmation preamble.
+  const offered = appointmentService
+    .getAvailableSlots(new Date())
+    .map((slot) => `${slot.spokenTime} — slot_id ${slot.slotId}`)
+    .join('; ');
+
+  return { result: oneLine(`Available: ${offered}.`) };
+}
+
+async function bookAppointment(args: ToolCallArgs): Promise<ToolOutcome> {
+  const parsed = bookAppointmentSchema.safeParse(args);
+
+  if (!parsed.success) {
+    return fieldFailure(appointmentArgsError(parsed.error.issues));
+  }
+
+  // ONE clock read, resolved once and passed down. Re-reading the clock later in
+  // this handler could straddle the UTC-midnight rollover of the offered set and
+  // book a slot that was never validated.
+  const slot = appointmentService.findSlotById(parsed.data.slot_id, new Date());
+
+  if (slot === null) {
+    return fieldFailure(SLOT_ID_UNKNOWN);
+  }
+
+  try {
+    await appointmentService.bookAppointment({
+      patientId: parsed.data.patient_id,
+      scheduledFor: slot.scheduledFor,
+    });
+    return { result: `Booked. Appointment on ${slot.spokenTime}.` };
+  } catch (error) {
+    // Unknown or soft-deleted patient — the caller's problem to resolve
+    // conversationally, not an outage. Same split as `update_patient`.
+    if (error instanceof NotFoundError) {
+      return fieldFailure(PATIENT_ID_UNKNOWN);
+    }
+    return infraFailure('The appointment could not be booked because the record store is unavailable.');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
 
@@ -255,6 +350,8 @@ const HANDLERS: Record<string, ToolHandler | undefined> = {
   create_patient: createPatient,
   lookup_patient_by_phone: lookupPatientByPhone,
   update_patient: updatePatient,
+  get_appointment_slots: getAppointmentSlots,
+  book_appointment: bookAppointment,
 };
 
 export const TOOL_NAMES: readonly string[] = Object.keys(HANDLERS);
