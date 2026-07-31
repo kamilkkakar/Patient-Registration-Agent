@@ -34,6 +34,7 @@ Voice path verified end-to-end on a live inbound call (lookup → create → han
 - **Full-row deduplication** — identical demographics reuse the existing patient; shared household phones still get separate records
 - **Returning-caller update offer** via phone lookup (separate from dedupe)
 - **Call transcripts** linked to the patient when the call registered one
+- **Mock appointment scheduling** offered after a successful save — three computed weekday slots, booked by id
 - **Read-only dashboard** for reviewers — one static HTML page, same origin as the API
 
 ---
@@ -87,6 +88,7 @@ Every JSON response uses `{ "data": ..., "error": null }` — including errors.
 | `PUT` | `/patients/:id` | Partial updates |
 | `DELETE` | `/patients/:id` | Soft-delete; returns the tombstoned record |
 | `GET` | `/patients/:id/transcripts` | Call transcripts for that patient |
+| `GET` | `/patients/:id/appointments` | Appointments for that patient; `404` if unknown or soft-deleted |
 | `GET` | `/health` | `503` if the database is down |
 | `GET` | `/` · `/dashboard` | Patients dashboard (HTML) |
 
@@ -164,12 +166,33 @@ npm run dev
 | `VAPI_ASSISTANT_ID` | for voice scripts | Existing assistant to update in place |
 | `VAPI_PHONE_NUMBER_ID` | for voice scripts | Number to attach inbound routing |
 
-After the API is public:
+### Deploying
+
+The Railway service is deployed from the CLI, **not** from a GitHub connection — pushing to the
+repository does not deploy it. `railway.json` supplies the build and start commands (the start
+command runs `prisma migrate deploy` before booting, so migrations apply on every deploy).
 
 ```bash
-node scripts/create-tools.mjs
-node scripts/create-assistant.mjs
+railway up                    # builds and deploys the current working directory
+curl "$API/health"            # confirm uptime_seconds reset — that is the proof it redeployed
 ```
+
+> If you add a GitHub integration to the service later, delete this note — two deploy paths that
+> disagree is worse than one that is documented.
+
+### Provisioning the voice agent
+
+Once the API is publicly reachable, point Vapi at it. Re-running these is safe:
+`scripts/create-tools.mjs` deletes its own previously-created tools first, so re-runs replace rather
+than accumulate.
+
+```bash
+node scripts/create-tools.mjs        # creates the five tools, attaches them to the assistant
+node scripts/create-assistant.mjs    # pushes the system prompt, voice and transcriber settings
+```
+
+**Deploy before you provision.** Attaching a tool the running API does not implement means a caller
+who triggers it hears the agent stall mid-call — the API answers `Unknown tool`.
 
 ### Tests
 
@@ -217,7 +240,12 @@ Each named scenario has a *decided* behavior, not an accidental one. Rows that a
 
 ### Nice-to-haves not built yet
 
-Appointment scheduling after registration · Spanish language switch · REST auth + pagination · editable dashboard · street-name spell-back for STT mishears.
+Spanish language switch · rescheduling and cancelling appointments (booking only, for now) · real
+clinic availability instead of computed mock slots · REST auth + pagination · editable dashboard ·
+street-name spell-back for STT mishears.
+
+Appointment scheduling is built and tested, but the offer has **not yet been exercised on a live
+call** — the tool path is covered by the suite; the conversational half is not.
 
 ---
 
