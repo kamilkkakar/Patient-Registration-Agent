@@ -67,7 +67,8 @@ Voice and REST share the service layer but normalize differently on purpose: a R
 | Layer | Choice | Why |
 | --- | --- | --- |
 | Telephony + voice | **Vapi** | STT, TTS, turn-taking, barge-in without building a media stack |
-| LLM | **GPT-4.1 mini** (via Vapi) | Fast / low-latency intake; strong enough for corrections and confirmations |
+| Speech-to-text | **Deepgram nova-3** (numerals on) | Better phone / ZIP / DOB digit capture |
+| LLM | **GPT-4.1 mini** (via Vapi) | Fast intake with a warm tone; strong enough for corrections |
 | Backend | **Node.js · TypeScript · Fastify** | One process for REST + webhooks |
 | Database | **Postgres · Prisma** | Real types (`DATE` for DOB, enums, soft-delete) |
 | Hosting | **Railway** | App + DB together; no free-tier cold starts mid-call |
