@@ -9,6 +9,6 @@ process.env.LOG_LEVEL = 'silent';
 
 if (!process.env.DATABASE_URL) {
   throw new Error(
-    'DATABASE_URL is not set. Tests run against a real Postgres — start it with `npm run db:up`.',
+    'DATABASE_URL is not set. Tests run against a real Postgres — point it at any instance, then run `npx prisma generate` and `npx prisma migrate deploy` (see README "Local setup").',
   );
 }

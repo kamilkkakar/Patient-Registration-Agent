@@ -144,6 +144,7 @@ git clone https://github.com/kamilkkakar/Patient-Registration-Agent.git
 cd Patient-Registration-Agent
 
 npm ci --ignore-scripts
+npx prisma generate           # required: --ignore-scripts skips Prisma's postinstall
 cp .env.example .env          # set DATABASE_URL (and Vapi vars for the phone path)
 npx prisma migrate deploy
 npm run db:seed               # two fictional demo patients
@@ -174,10 +175,36 @@ node scripts/create-assistant.mjs
 ### Tests
 
 ```bash
-# Requires DATABASE_URL pointing at a real Postgres
+# Requires DATABASE_URL pointing at a real Postgres, with `npx prisma generate`
+# and `npx prisma migrate deploy` already run (see Local setup above).
 npm test
 npm run typecheck
 ```
+
+---
+
+## Edge cases & resilience
+
+Each named scenario has a *decided* behavior, not an accidental one. Rows that are only voice-verified say so, and rows still waiting on a dedicated dial say that too.
+
+| Scenario | Behavior | Evidence |
+| --- | --- | --- |
+| **Invalid DOB — future date** | Rejected server-side, never stored. Over REST it is a `422` naming `date_of_birth`. Over voice the tool returns a bare `error` naming the field and the word *future*, with **no** inline `request-failed` message — so Vapi's speech precedence falls through to the model and Nora re-prompts for that one field only (*“I've got that as a date that hasn't happened yet…”*). | `tests/api/patients.create.test.ts` — *rejects a date of birth in the future with 422 naming date_of_birth*; `tests/vapi/tool.route.test.ts` — *a future date of birth is named as such* and *validation failures carry NO inline request-failed message*. Live voice re-prompt is **PENDING** a dedicated dial. |
+| **Invalid DOB — impossible date** | `02/30/1992` fails the calendar check, including the full leap-year rule. On the voice path `normalizeDateOfBirth` returns `null` and the raw value is passed through to Zod, so the caller gets the field-specific error rather than a generic “Required”. | `tests/api/patients.create.test.ts` — *rejects a impossible calendar date with 422 naming date_of_birth*; `tests/normalize/date.test.ts` — *rejects impossible calendar dates* and *applies the full leap-year rule*; pass-through pinned by `tests/vapi/tool.route.test.ts` — *a normalizer returning null yields a FIELD-SPECIFIC error, not “required”*. |
+| **Telephony drops mid-call** | **Decided: partial data is discarded, never persisted.** There is no draft row and no session state — `prisma/schema.prisma` holds only `patients`, `call_transcripts` and `appointments`, and the one patient write happens inside `create_patient` after the confirmed read-back. A drop before that returns means the patient row never existed. What *does* survive is the call transcript, with `patient_id` NULL. A call that was substantial (≥ 400 transcript chars **or** ≥ 60s) yet registered nobody logs `vapi_call_completed_without_patient`, so a lost registration is not indistinguishable from an abandoned dial. | `tests/vapi/events.test.ts` — *persists a long transcript that registered nobody rather than failing the report* (asserts `patient_id` NULL); `tests/vapi/events.without-patient.test.ts` — the five threshold cases on `shouldWarnCallWithoutPatient`. |
+| **DB write fails** | The caller never gets silence. The handler catches the throw and answers **HTTP 200** with an `error` *plus* an inline `request-failed` message — fixed wording, because a model improvising around an unknown outage is worse than one sentence: *“I'm sorry — I've got all your details but our system isn't saving them right now. Let me try once more.”* The prompt then retries once and, on a second failure, closes honestly without claiming the caller is registered. Every failure is logged with the server-generated `reqId` correlation id (`src/app.ts` sets `requestIdHeader: false` — ours, never the client's), and the `vapi_tool_result` line carries `tool_call_id` as the Vapi-side handle. | `tests/vapi/tool.infra-failure.test.ts` — create / lookup / update each → 200, error text, exact `INFRA_SPEECH`. |
+| **Caller wants to start over** | Every collected value is thrown away and the reset is announced in the same breath as the first fresh question — no quiet partial reset that mixes two attempts. **Prompt-only by construction:** the server holds no state between tool calls, so there is nothing server-side to reset; the only state is the model's context. | `prompts/intake-coordinator.md` § “Starting over” and § 2.8. **PENDING** live proof — needs a dedicated dial. |
+
+### Secondary cases
+
+| Scenario | Behavior | Evidence |
+| --- | --- | --- |
+| **3-digit phone number** | `422` over REST; over voice a field-specific error with no inline message, so Nora asks for the full ten digits starting with the area code. Strict NANP — not “any 10 digits”. | `tests/api/patients.create.test.ts` — *rejects a three-digit phone number with 422 naming phone_number*; `tests/vapi/tool.route.test.ts` — *validation failures carry NO inline request-failed message* (uses `"five five five"`). **Voice-verified** on a live call — an incomplete first attempt drew a re-prompt for all ten digits. |
+| **Gibberish input** | Junk never reaches storage. Digits, markup, emoji, underscores and the U+202E bidi override are all rejected on name fields; unparseable ZIP/phone/DOB return the field error rather than a silent drop. | `tests/api/patients.names.test.ts` — the ten cases under `describe('rejected names')`; `tests/vapi/tool.route.test.ts` — *a normalizer returning null yields a FIELD-SPECIFIC error*. |
+| **Out-of-order answers** | Anything the caller volunteers early is kept and never asked for again; the model records both values and skips the question it no longer needs. Memory rule, not a state machine. | `prompts/intake-coordinator.md` § “Take everything they give you”, § 2.8. **Voice-verified** on a live call — the caller added an email after the read-back; Nora collected it and saved. |
+| **Barge-in mid read-back** | Nora stops, takes the interruption as the turn, fixes that field and resumes the read-back from where she was — never from the top. Half transport config (`startSpeakingPlan` / `stopSpeakingPlan`), half prompt. | `prompts/intake-coordinator.md` § “Interruptions and listening”, § 2.8. **PENDING** live proof — needs a dedicated dial. |
+| **Duplicate submission on retry** | Deduplication is **full-row**: an identical demographic record returns the existing patient (`200`, same id) instead of inserting a second one, so a retried save is safe. A shared household phone or a matching name alone still creates a new record. End-of-call reports are idempotent on `vapi_call_id`. | `tests/api/patients.dedupe.test.ts` — *returns 201 on the first create and 200 with the same id on an identical second create* plus the three non-dedupe cases; `tests/vapi/tool.route.test.ts` — *identical full row → Already registered with the same Patient ID*; `tests/vapi/events.test.ts` — *is IDEMPOTENT — the same vapi_call_id twice yields exactly one row*. |
+| **Caller silence / timeout** | Nora waits, checks in once (*“Are you still there?”*), and after a second silence tells the caller to ring back and wraps up. `maxDurationSeconds: 600` is the hard backstop. **Unverified** — no automated test and no live-call evidence; the behavior is defined in the prompt and assistant config only. | `prompts/intake-coordinator.md` § “Silence and confusion”, § 2.10 (`maxDurationSeconds`). No test. |
 
 ---
 
