@@ -41,16 +41,6 @@ Thumbs.db
 prisma/*.db
 prisma/*.db-journal
 
-# Coding harness + process artifacts (not required to run the voice agent)
-.claude/
-.cursor/
-session-logs/
-docs/
-CLAUDE.md
-AGENTS.md
-voice-ai-agent-challenge.md
-Voice AI Agent Coding Challenge*.pdf
-*.pdf
 
 # Misc local noise
 *.local
