@@ -251,3 +251,140 @@ describe('book_appointment', () => {
     expect(results[0]?.message).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// reschedule_appointment / cancel_appointment
+// ---------------------------------------------------------------------------
+
+/** Book the first offered slot and hand back the row's id. */
+async function bookFirstSlot(id: string, patientId: string): Promise<string> {
+  const { slotIds } = await offerSlots(`${id}-offer`, patientId);
+  const { results } = await postTool(
+    specShape(`${id}-book`, 'book_appointment', { patient_id: patientId, slot_id: slotIds[0] }),
+  );
+  expect(results[0]?.error).toBeUndefined();
+
+  const row = await prisma.appointment.findFirstOrThrow({ where: { patientId } });
+  return row.id;
+}
+
+describe('reschedule_appointment', () => {
+  it('moves the booking and speaks the new time back', async () => {
+    const patientId = await createPatient('Rtoolmove');
+    const appointmentId = await bookFirstSlot('rt1', patientId);
+    const { slotIds } = await offerSlots('rt1-again', patientId);
+
+    const { status, results } = await postTool(
+      specShape('rt1-move', 'reschedule_appointment', {
+        patient_id: patientId,
+        appointment_id: appointmentId,
+        slot_id: slotIds[1],
+      }),
+    );
+
+    expect(status).toBe(200);
+    expect(results[0]?.error).toBeUndefined();
+    expect(results[0]?.result).toMatch(/Rescheduled/i);
+
+    const row = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } });
+    expect(row.status).toBe('SCHEDULED');
+  });
+
+  it('refuses a fabricated slot_id as a FIELD failure', async () => {
+    // WHY: an inline request-failed would win Vapi's speech precedence and make
+    // Nora read "our system isn't responding" when the caller merely picked a
+    // stale time. Asserted by ABSENCE of `message`.
+    const patientId = await createPatient('Rtoolbadslot');
+    const appointmentId = await bookFirstSlot('rt2', patientId);
+
+    const { status, results } = await postTool(
+      specShape('rt2-bad', 'reschedule_appointment', {
+        patient_id: patientId,
+        appointment_id: appointmentId,
+        slot_id: 'slot-1999-01-01T09:00Z',
+      }),
+    );
+
+    expect(status).toBe(200);
+    expect(results[0]?.error).toBeDefined();
+    expect(results[0]?.message).toBeUndefined();
+  });
+
+  it('refuses an appointment that is not on file, as a FIELD failure', async () => {
+    const patientId = await createPatient('Rtoolunknown');
+    const { slotIds } = await offerSlots('rt3-offer', patientId);
+
+    const { results } = await postTool(
+      specShape('rt3-move', 'reschedule_appointment', {
+        patient_id: patientId,
+        appointment_id: '3fa85f64-5717-4562-b3fc-2c963f66afa6',
+        slot_id: slotIds[0],
+      }),
+    );
+
+    expect(results[0]?.error).toBeDefined();
+    expect(results[0]?.message).toBeUndefined();
+  });
+});
+
+describe('cancel_appointment', () => {
+  it('cancels and confirms the released time', async () => {
+    const patientId = await createPatient('Ctoolcancel');
+    const appointmentId = await bookFirstSlot('ct1', patientId);
+
+    const { status, results } = await postTool(
+      specShape('ct1-cancel', 'cancel_appointment', {
+        patient_id: patientId,
+        appointment_id: appointmentId,
+      }),
+    );
+
+    expect(status).toBe(200);
+    expect(results[0]?.error).toBeUndefined();
+    expect(results[0]?.result).toMatch(/Cancelled/i);
+
+    const row = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } });
+    expect(row.status).toBe('CANCELLED');
+  });
+
+  it('refuses a second cancel as a FIELD failure', async () => {
+    // WHY: a repeat cancel means the model lost track. The caller should hear
+    // Nora say it is already cancelled, in her own words — not an outage line.
+    const patientId = await createPatient('Ctooltwice');
+    const appointmentId = await bookFirstSlot('ct2', patientId);
+
+    await postTool(
+      specShape('ct2-first', 'cancel_appointment', {
+        patient_id: patientId,
+        appointment_id: appointmentId,
+      }),
+    );
+    const { results } = await postTool(
+      specShape('ct2-second', 'cancel_appointment', {
+        patient_id: patientId,
+        appointment_id: appointmentId,
+      }),
+    );
+
+    expect(results[0]?.error).toBeDefined();
+    expect(results[0]?.message).toBeUndefined();
+  });
+
+  it('rejects a cancel payload carrying a slot_id', async () => {
+    // WHY: .strict() at the tool boundary. A model that sends a slot to cancel
+    // has confused the two tools.
+    const patientId = await createPatient('Ctoolslot');
+    const appointmentId = await bookFirstSlot('ct3', patientId);
+
+    const { results } = await postTool(
+      specShape('ct3-slot', 'cancel_appointment', {
+        patient_id: patientId,
+        appointment_id: appointmentId,
+        slot_id: 'slot-2026-08-03T09:00Z',
+      }),
+    );
+
+    expect(results[0]?.error).toBeDefined();
+    expect(results[0]?.message).toBeUndefined();
+  });
+});

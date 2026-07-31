@@ -80,7 +80,11 @@ function formatSlotId(scheduledFor: Date): string {
   return `slot-${year}-${month}-${day}T${hour}:${minute}Z`;
 }
 
-function formatSpokenTime(scheduledFor: Date): string {
+/**
+ * Exported because `cancel_appointment` has to say WHICH time it released, and
+ * it only has the stored row — not a `Slot` from the offered catalogue.
+ */
+export function formatSpokenTime(scheduledFor: Date): string {
   // `?? ''` satisfies noUncheckedIndexedAccess; getUTCDay/getUTCMonth are
   // always in range, so the fallback is unreachable.
   const weekday = WEEKDAYS[scheduledFor.getUTCDay()] ?? '';
