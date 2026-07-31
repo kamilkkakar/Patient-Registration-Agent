@@ -205,9 +205,38 @@ async function lookupPatientByPhone(args: ToolCallArgs): Promise<ToolOutcome> {
         ? ` Plus ${String(patients.length - shown.length)} more — ask the caller for their name to narrow it down.`
         : '';
 
+    // Upcoming bookings ride along on the lookup the agent already makes at the
+    // start of every call, so changing an appointment costs no extra round trip
+    // — which the caller would hear as a pause before Nora says anything useful.
+    //
+    // ONLY for an unambiguous single match. On a shared household number there
+    // is no way to know whose appointments to read out, and guessing would speak
+    // one person's schedule to another.
+    const only = patients.length === 1 ? patients[0] : undefined;
+    let upcoming = '';
+
+    if (only !== undefined) {
+      // Capped like the match list above, and for the same reason: this string is
+      // read by a model on a token budget (§ G14), and a patient with a long tail
+      // of bookings would push the rest of the result out of usefulness.
+      const appointments = (
+        await appointmentService.listUpcomingAppointmentsForPatient(only.patientId, new Date())
+      ).slice(0, MAX_LOOKUP_MATCHES);
+
+      upcoming =
+        appointments.length === 0
+          ? ' No upcoming appointments.'
+          : ` Upcoming: ${appointments
+              .map(
+                (appointment) =>
+                  `${appointmentService.formatSpokenTime(appointment.scheduledFor)} — appointment_id ${appointment.id}`,
+              )
+              .join('; ')}.`;
+    }
+
     return {
       result: oneLine(
-        `Found ${String(patients.length)} patient${patients.length === 1 ? '' : 's'}: ${listed}.${overflow}`,
+        `Found ${String(patients.length)} patient${patients.length === 1 ? '' : 's'}: ${listed}.${overflow}${upcoming}`,
       ),
     };
   } catch {

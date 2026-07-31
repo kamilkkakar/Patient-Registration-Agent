@@ -484,11 +484,19 @@ describe('lookup_patient_by_phone spoken contract', () => {
       specShape('tc-lookup-one', 'lookup_patient_by_phone', { phone_number: phone }),
     );
 
-    // Exact format from tools.ts: `Found ${n} patient${s}: ${listed}.`
+    // Exact format from tools.ts:
+    //   `Found ${n} patient${s}: ${listed}.${overflow}${upcoming}`
+    //
+    // The appointment sentence is part of the spoken contract, not an optional
+    // extra: a SINGLE match always ends with either "Upcoming: …" or "No upcoming
+    // appointments.", because silence about appointments is ambiguous to a model
+    // and invites it to invent one. This patient has never booked.
     expect(results[0]?.result).toBe(
-      `Found 1 patient: ${patient.firstName} ${patient.lastName}, born 02/15/1992, patient_id ${id}.`,
+      `Found 1 patient: ${patient.firstName} ${patient.lastName}, born 02/15/1992, patient_id ${id}. No upcoming appointments.`,
     );
-    expect(results[0]?.result).toMatch(/^Found 1 patient: .+ patient_id [0-9a-f-]{36}\.$/);
+    expect(results[0]?.result).toMatch(
+      /^Found 1 patient: .+ patient_id [0-9a-f-]{36}\. No upcoming appointments\.$/,
+    );
     expect(results[0]?.message).toBeUndefined();
   });
 });

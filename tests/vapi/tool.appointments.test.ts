@@ -388,3 +388,85 @@ describe('cancel_appointment', () => {
     expect(results[0]?.message).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// lookup_patient_by_phone — carries the caller's upcoming bookings
+// ---------------------------------------------------------------------------
+//
+// Discovery lives on the lookup because the agent already calls it at the start
+// of every call. Without the appointment_id here, reschedule and cancel are
+// unreachable without a second round trip the caller hears as a pause.
+//
+// Every patient here needs a UNIQUE phone: validPayload's default number is
+// shared by the whole suite, and appointments are only read for an unambiguous
+// single match.
+
+/** Create a patient on a phone number nothing else in the suite uses. */
+async function createPatientOnPhone(suffix: string, phone: string): Promise<string> {
+  const res = await api(app)
+    .post('/patients')
+    .send(validPayload({ last_name: testLastName(suffix), phone_number: phone }));
+  expect(res.status).toBe(201);
+  return String((res.body.data as Record<string, unknown>)['patient_id']);
+}
+
+async function lookup(id: string, phone: string): Promise<ToolResult> {
+  const { results } = await postTool(specShape(id, 'lookup_patient_by_phone', { phone_number: phone }));
+  return results[0]!;
+}
+
+describe('lookup_patient_by_phone with appointments', () => {
+  it('carries the appointment_id so a change needs no extra tool call', async () => {
+    const phone = '5125550188';
+    const patientId = await createPatientOnPhone('Lookupwithappt', phone);
+    const appointmentId = await bookFirstSlot('lk1', patientId);
+
+    const outcome = await lookup('lk1-lookup', phone);
+
+    expect(outcome.error).toBeUndefined();
+    expect(outcome.result).toContain(appointmentId);
+    expect(outcome.result).toMatch(/Upcoming/i);
+  });
+
+  it('says there are none rather than staying silent', async () => {
+    // WHY: silence is ambiguous to a model. An explicit sentence stops Nora
+    // inventing an appointment the caller never made.
+    const phone = '5125550189';
+    await createPatientOnPhone('Lookupnoappt', phone);
+
+    const outcome = await lookup('lk2-lookup', phone);
+
+    expect(outcome.result).toMatch(/No upcoming appointments/i);
+  });
+
+  it('omits a cancelled booking from the upcoming list', async () => {
+    // WHY: the whole point of the active-status whitelist. Reading a cancelled
+    // slot back as "your appointment" is a wrong answer on a live call.
+    const phone = '5125550190';
+    const patientId = await createPatientOnPhone('Lookupcancelled', phone);
+    const appointmentId = await bookFirstSlot('lk3', patientId);
+
+    await postTool(
+      specShape('lk3-cancel', 'cancel_appointment', {
+        patient_id: patientId,
+        appointment_id: appointmentId,
+      }),
+    );
+
+    const outcome = await lookup('lk3-lookup', phone);
+
+    expect(outcome.result).not.toContain(appointmentId);
+    expect(outcome.result).toMatch(/No upcoming appointments/i);
+  });
+
+  it('stays a single line', async () => {
+    // WHY: a line break in `result` is a parse error on Vapi's side (§ G4).
+    const phone = '5125550191';
+    const patientId = await createPatientOnPhone('Lookuponeline', phone);
+    await bookFirstSlot('lk4', patientId);
+
+    const outcome = await lookup('lk4-lookup', phone);
+
+    expect(outcome.result).not.toMatch(/[\r\n]/);
+  });
+});
