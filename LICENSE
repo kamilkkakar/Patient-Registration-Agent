@@ -1,0 +1,140 @@
+PROPRIETARY SOFTWARE LICENSE
+
+Patient Registration Voice Agent ("the Software")
+
+Copyright (c) 2026 Kamil Kakar. All rights reserved.
+
+THIS IS NOT OPEN SOURCE SOFTWARE. No rights are granted except those stated
+below in writing. If a right is not expressly granted here, it is withheld.
+
+--------------------------------------------------------------------------
+1. OWNERSHIP
+--------------------------------------------------------------------------
+
+The Software, including its source code, system prompts, database schema,
+documentation, and all associated materials, is the exclusive property of
+Kamil Kakar ("the Author"). It is protected by copyright law and international
+treaties. Possession of a copy conveys no ownership and no license.
+
+--------------------------------------------------------------------------
+2. PERMITTED USE
+--------------------------------------------------------------------------
+
+The Author grants a person who has received the Software directly from the
+Author a limited, personal, non-exclusive, non-transferable, revocable right
+to do only the following, and only for the purpose of evaluating the Author's
+work:
+
+  (a) read the source code and documentation; and
+  (b) run the Software locally, on infrastructure the evaluator controls, using
+      the evaluator's own credentials and accounts.
+
+This right may not be assigned, sublicensed, or extended to any other person or
+organization. It terminates automatically upon completion of the evaluation, or
+upon written notice from the Author, whichever is earlier.
+
+--------------------------------------------------------------------------
+3. PROHIBITED WITHOUT PRIOR WRITTEN PERMISSION
+--------------------------------------------------------------------------
+
+All of the following are prohibited absent the Author's prior express written
+permission:
+
+  (a) use of the Software, in whole or in part, in production, in commerce, or
+      in the provision of any service to any third party;
+  (b) copying, publishing, mirroring, or redistributing the Software or any
+      portion of it, including to any public or private code repository;
+  (c) modifying the Software or creating derivative works from it;
+  (d) selling, licensing, renting, leasing, or otherwise transferring the
+      Software or any rights in it;
+  (e) hosting the Software, or any derivative of it, as a hosted or managed
+      service;
+  (f) removing, obscuring, or altering this license or any copyright,
+      attribution, or proprietary notice;
+  (g) using the Software, its source code, its system prompts, or its
+      documentation as training data, fine-tuning data, or evaluation data for
+      any machine learning or artificial intelligence model or system; and
+  (h) extracting the system prompt in prompts/intake-coordinator.md, or the
+      voice-input normalization logic, for use in any other product or agent.
+
+--------------------------------------------------------------------------
+4. NO CREDENTIALS, NO TELEPHONY ACCESS
+--------------------------------------------------------------------------
+
+No API keys, telephony numbers, service accounts, or hosted infrastructure of
+the Author are licensed, shared, or implied by access to the Software. The
+demo telephone number is not published and is not part of this license.
+Any person running the Software must supply their own Vapi, telephony, model
+provider, database, and hosting accounts, and is solely responsible for all
+costs, terms, and obligations arising from those accounts.
+
+Requests for a supervised demonstration may be directed to the Author at
+kamilkakar@gmail.com.
+
+--------------------------------------------------------------------------
+5. NOT FOR CLINICAL OR REGULATED USE
+--------------------------------------------------------------------------
+
+The Software is a technical demonstration. It is NOT a medical device, NOT a
+clinical system, and NOT a system of record.
+
+It has not been assessed for, and does not claim, compliance with HIPAA, GDPR,
+PIPEDA, or any other health-information, privacy, accessibility, or telephony
+regulation. It provides no encryption at rest, no access control on its REST
+interface, no audit trail sufficient for regulated use, and no data retention
+or deletion guarantees adequate for personal health information.
+
+Real patient data, protected health information, and any other real personal
+data MUST NOT be entered into, transmitted to, or stored by the Software. Use
+only fictional data. Any person who does otherwise does so entirely at their
+own risk and assumes full responsibility and liability for that decision.
+
+The Software places and receives telephone calls and records and transcribes
+conversations. Any person operating it is solely responsible for obtaining all
+consents and providing all disclosures required by the recording, wiretap, and
+telecommunications laws of every applicable jurisdiction.
+
+--------------------------------------------------------------------------
+6. NO WARRANTY
+--------------------------------------------------------------------------
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, ACCURACY, AND NONINFRINGEMENT.
+
+The Author does not warrant that the Software will be uninterrupted, accurate,
+secure, or error-free, that any voice interaction will be correctly understood
+or transcribed, or that any record it creates will be complete or correct.
+
+--------------------------------------------------------------------------
+7. LIMITATION OF LIABILITY
+--------------------------------------------------------------------------
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE AUTHOR
+BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OF OR OTHER DEALINGS IN THE SOFTWARE. THIS INCLUDES,
+WITHOUT LIMITATION, ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES, ANY LOSS OF DATA, ANY TELEPHONY OR MODEL PROVIDER
+CHARGES INCURRED, AND ANY HARM ARISING FROM RELIANCE ON DATA THE SOFTWARE
+CAPTURED, OMITTED, OR MISTRANSCRIBED.
+
+--------------------------------------------------------------------------
+8. TERMINATION
+--------------------------------------------------------------------------
+
+Any breach of this license terminates all rights granted under it immediately
+and automatically, without notice. On termination, all copies of the Software
+in the possession or control of the breaching party must be destroyed.
+Sections 1, 3, 5, 6, 7, and 8 survive termination.
+
+--------------------------------------------------------------------------
+9. CONTACT
+--------------------------------------------------------------------------
+
+All permission requests, licensing enquiries, and demonstration requests:
+
+  Kamil Kakar — kamilkakar@gmail.com
+
+Permission is valid only if given by the Author in writing. Silence, absence of
+enforcement, or continued availability of the repository is not permission.

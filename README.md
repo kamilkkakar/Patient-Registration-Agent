@@ -1,25 +1,24 @@
 # Patient Registration Agent
 
-Dial a real U.S. number. Speak naturally. Walk away with a validated patient record in Postgres — queryable over REST and visible on a live dashboard.
+A real U.S. phone number, answered by a voice agent. Speak naturally. Walk away with a validated patient record in Postgres — queryable over REST and visible on a live dashboard.
 
 **Nora** (Savannah voice) is a warm intake coordinator: she greets you clearly, collects demographics including email, confirms them out loud, handles corrections, and only then saves. Optional insurance, emergency contact, and language are offered once — never forced.
 
 ---
 
-## Try it live
+## Trying it
 
-| | |
-| --- | --- |
-| **Phone** | **[+1 (662) 443-8181](tel:+16624438181)** |
-| **Dashboard** | [Open the patient registry](https://api-production-10c0.up.railway.app/dashboard) |
-| **API** | `https://api-production-10c0.up.railway.app` |
+**The demo phone number is not published.** Placing a call costs money and the line is not open to
+the public. There are two ways to exercise the voice path:
 
-```bash
-curl https://api-production-10c0.up.railway.app/health
-curl https://api-production-10c0.up.railway.app/patients
-```
+1. **Ask for access.** Contact the author (see [License](#license)) and the number can be shared for
+   a scheduled evaluation.
+2. **Bring your own.** Point the service at your own Vapi account and phone number — see
+   [Local setup](#local-setup), then run `scripts/create-tools.mjs` and `scripts/create-assistant.mjs`
+   to provision an assistant against your own deployment. No credentials of the author's are needed
+   or included.
 
-Call the number, finish registration, then refresh the dashboard — your row should be there.
+The REST surface and dashboard can be exercised without any telephony at all — see [API](#api).
 
 Voice path verified end-to-end on a live inbound call (lookup → create → hangup, with transcript linked).
 
@@ -224,4 +223,18 @@ Appointment scheduling after registration · Spanish language switch · REST aut
 
 ## License
 
-Private assessment / demo project. Not for production clinical use.
+**Proprietary — all rights reserved.** This is not open source. See [LICENSE](LICENSE) for the full
+terms.
+
+In short: you may read the code and run it locally on your own infrastructure to evaluate the work.
+You may not use it in production or commerce, redistribute or republish it, create derivative works,
+host it as a service, or use it (including its system prompt and normalization logic) as training
+data for any AI model — without prior written permission.
+
+No API keys, telephone numbers, or hosted infrastructure are licensed with it. Run it against your
+own Vapi, model provider, database, and hosting accounts.
+
+Not a medical device and not HIPAA-compliant. **Do not enter real patient data.** Use fictional data
+only.
+
+Permission requests, licensing enquiries, and demo access: **kamilkakar@gmail.com**
