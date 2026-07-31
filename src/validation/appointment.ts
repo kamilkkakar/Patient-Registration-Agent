@@ -29,14 +29,50 @@ export const getAppointmentSlotsSchema = z
   })
   .strict();
 
+/**
+ * Shared by `book_appointment` and `reschedule_appointment`.
+ *
+ * One definition, deliberately: two copies of the same rule drift, and the
+ * failure mode would be a slot id that books but cannot be rescheduled to.
+ */
+const slotIdSchema = z
+  .string()
+  .trim()
+  .regex(SLOT_ID_PATTERN, 'Must be one of the slot ids returned by get_appointment_slots.');
+
+/**
+ * An appointment id, as handed to the model by `lookup_patient_by_phone`.
+ *
+ * A uuid check here is not ceremony: "the one on monday" is exactly what a model
+ * produces when it did not read the lookup result, and rejecting it costs
+ * nothing where a database round trip would.
+ */
+const appointmentIdSchema = z
+  .string()
+  .uuid('Must be an appointment id returned by lookup_patient_by_phone.');
+
 /** `book_appointment` arguments. */
 export const bookAppointmentSchema = z
   .object({
     patient_id: patientIdSchema,
-    slot_id: z
-      .string()
-      .trim()
-      .regex(SLOT_ID_PATTERN, 'Must be one of the slot ids returned by get_appointment_slots.'),
+    slot_id: slotIdSchema,
+  })
+  .strict();
+
+/** `reschedule_appointment` arguments. */
+export const rescheduleAppointmentSchema = z
+  .object({
+    patient_id: patientIdSchema,
+    appointment_id: appointmentIdSchema,
+    slot_id: slotIdSchema,
+  })
+  .strict();
+
+/** `cancel_appointment` arguments — no slot; cancelling does not take a time. */
+export const cancelAppointmentSchema = z
+  .object({
+    patient_id: patientIdSchema,
+    appointment_id: appointmentIdSchema,
   })
   .strict();
 
