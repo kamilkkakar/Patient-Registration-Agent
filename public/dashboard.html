@@ -592,7 +592,12 @@
         appointmentsFor(patient.patient_id).map(function (appointment) {
           return {
             label: formatIsoDateTime(appointment.scheduled_for),
-            value: appointment.status,
+            // Status AND the date it was booked. `created_at` is when the caller
+            // rang in; `scheduled_for` is the appointment itself. Showing only
+            // the latter left no way to tell a booking made this morning from
+            // one made months ago — and after a reschedule, created_at is the
+            // only remaining record of when the caller first got in touch.
+            value: appointment.status + ' · booked ' + formatIsoDate(appointment.created_at),
             always: true
           };
         })

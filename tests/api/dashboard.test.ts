@@ -201,3 +201,13 @@ describe('dashboard-helpers.js', () => {
     expect(page.indexOf('dashboard-helpers.js')).toBeLessThan(page.indexOf('var helpers = window.DashboardHelpers'));
   });
 });
+
+it('shows when a booking was made, not only when it is for', async () => {
+  // WHY: created_at (the caller rang in) and scheduled_for (the appointment) are
+  // different facts. The detail row previously showed only the second, so a
+  // reviewer could not tell a booking made this morning from one made in June.
+  const source = await readFile(DASHBOARD_PATH, 'utf8');
+
+  expect(source).toContain('appointment.created_at');
+  expect(source).toContain('booked ');
+});
