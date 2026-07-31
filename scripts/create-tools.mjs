@@ -133,6 +133,47 @@ const tools = [
       },
     },
   },
+  // Scheduling is offered only AFTER create_patient succeeds — both tools need the
+  // patient_id it returns. Declared parameters must match the Zod schemas in
+  // src/validation/appointment.ts EXACTLY: both are .strict(), so one extra
+  // property declared here field-fails every call the model makes.
+  {
+    type: 'function',
+    server,
+    function: {
+      name: 'get_appointment_slots',
+      description:
+        'Get the three mock appointment times currently on offer. Call only after create_patient has succeeded. Read the returned times to the caller and keep each slot_id exactly as given.',
+      parameters: {
+        type: 'object',
+        properties: {
+          patient_id: { type: 'string', description: 'The patient_id returned by create_patient or lookup_patient_by_phone.' },
+        },
+        required: ['patient_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    server,
+    function: {
+      name: 'book_appointment',
+      description:
+        'Book one of the times returned by get_appointment_slots. Call only after create_patient has succeeded.',
+      parameters: {
+        type: 'object',
+        properties: {
+          patient_id: { type: 'string', description: 'The patient_id returned by create_patient or lookup_patient_by_phone.' },
+          slot_id: {
+            type: 'string',
+            description:
+              'Copy a slot_id from the most recent get_appointment_slots result character for character. Never invent, reformat or shorten one.',
+          },
+        },
+        required: ['patient_id', 'slot_id'],
+      },
+    },
+  },
 ];
 
 console.log(`server.url = ${server.url}\n`);
@@ -140,7 +181,13 @@ console.log(`server.url = ${server.url}\n`);
 // Remove any tools from a previous run so re-running does not accumulate
 // duplicates the model then sees twice.
 const existing = await api('GET', '/tool');
-const ours = new Set(['create_patient', 'lookup_patient_by_phone', 'update_patient']);
+const ours = new Set([
+  'create_patient',
+  'lookup_patient_by_phone',
+  'update_patient',
+  'get_appointment_slots',
+  'book_appointment',
+]);
 if (Array.isArray(existing.json)) {
   for (const t of existing.json) {
     if (ours.has(t?.function?.name)) {

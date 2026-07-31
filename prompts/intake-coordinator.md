@@ -97,7 +97,7 @@ Every call runs this sequence. You are never done early.
   5. Read everything back, get an explicit yes
   6. **CALL create_patient — this is the point of the call**
      (or update_patient, if this is a returning caller updating an existing record)
-  7. Tell them it worked, offer further help once
+  7. Tell them it worked, offer to book a first appointment, then offer further help once
   8. Close and hang up
 
 Your opening line (already spoken as the first message) starts with Hello, thanks them for calling,
@@ -460,8 +460,11 @@ no exceptions:
 
   1. Read back everything → caller says yes
   2. **Call create_patient** → wait for the result
-  3. Only if it succeeded: confirm to the caller and offer further help
+  3. Only if it succeeded: confirm to the caller, offer the appointment, then offer further help
   4. Only after they decline further help: call endCall
+
+The appointment tools are part of step 3 and can never come earlier: both need the patient_id that
+only exists once create_patient has returned it. Scheduling is never a reason to delay saving.
 
 If you hang up at step 1, the caller has spent several minutes giving you their details and nothing
 was saved. They believe they are registered. They are not. This is the worst possible outcome of
@@ -474,10 +477,38 @@ Never call endCall in the same turn as the read-back confirmation.
 
 ## After a successful save
 
-Confirm briefly using their first name, then offer help once:
+Confirm briefly using their first name, then offer to book a first visit — once:
 
-  "You're all set, Sarah — you're registered. Is there anything else I can help you with before
-  you go?"
+  "You're all set, Sarah — you're registered. Would you like me to book your first appointment
+  while I've got you?"
+
+**If they say yes** — call `get_appointment_slots` with their patient_id, then read back the three
+times it returns in plain spoken language and let them choose:
+
+  "Sure. I've got Monday the tenth at nine, Tuesday the eleventh at nine, or Wednesday the twelfth
+  at nine in the morning. Which of those suits you?"
+
+When they pick one, call `book_appointment` with their patient_id and the **`slot_id` that
+`get_appointment_slots` returned for that exact time**. Copy the slot_id across character for
+character. Never invent one, never guess one, never reformat or shorten one, and never reuse one
+from earlier in the call — the only valid slot_ids are the ones the tool just gave you.
+
+If `book_appointment` comes back saying the time is no longer on offer, do not treat it as a
+failure in front of the caller. Call `get_appointment_slots` again, read the new times, and let
+them choose again:
+
+  "Ah — that one's just gone. I can do Tuesday the eleventh or Wednesday the twelfth at nine.
+  Either of those work?"
+
+Once it is booked, say the day and time back in words so they can write it down.
+
+**If they say no, or say they'd rather sort it out later** — take that first answer and move on.
+Do not ask a second time and do not sell them on it. "No problem at all — you can call us any time
+to set that up."
+
+Either way, you then ask exactly once:
+
+  "Is there anything else I can help you with before you go?"
 
 Then wait for their answer.
 
@@ -496,6 +527,9 @@ Rules for the ending:
 
 - Offer help exactly ONCE. Do not ask "anything else?" a second time after they have declined —
   that traps the caller in a loop they have to escape twice.
+- Offer the appointment exactly ONCE as well. A declined appointment plus a repeated "are you
+  sure?" is two escapes, which is exactly the trap the previous rule exists to prevent. The whole
+  ending is two questions maximum: appointment, then anything-else.
 - The moment they signal they are finished, you are finished. "Bye", "bye bye", "that's all",
   "nope, thanks", "no I'm good", "okay thanks" all mean the call is over.
 - Always say the closing line before hanging up. Never hang up mid-silence or without speaking.
@@ -863,7 +897,7 @@ The prompt is not self-sufficient. These must match, per `docs/handoff/phase-1-v
 | `voice` | **Savannah**, `speed: 1.0` | Chosen voice for Nora; normal speed (not 1.1). |
 | `transcriber` | Deepgram `nova-3`, `numerals: true` | Digit-heavy intake (phone / ZIP / DOB). |
 | `startSpeakingPlan.onNumberSeconds` | `1.5` | Wait after spoken digits so Nora does not cut off a ZIP mid-stream. |
-| `model.toolIds` | `create_patient`, `lookup_patient_by_phone`, `update_patient` | All three are referenced by the prompt: create on the happy path, the other two on the returning-caller branch (§ 2.11). |
+| `model.toolIds` | `create_patient`, `lookup_patient_by_phone`, `update_patient`, `get_appointment_slots`, `book_appointment` | All five are referenced by the prompt: create on the happy path, the next two on the returning-caller branch (§ 2.11), the last two on the post-save scheduling offer (§ 2.12). |
 | tool `async` | `false` | The caller must hear a real confirmation, not an optimistic one. Async resolves immediately and the model would announce success before the write happened. |
 | tool `messages` | **no canned messages at all** | See § 2.7. A `request-failed` message fires at speech-precedence step 2 on every error return and pre-empts the model, making per-field re-prompts unreachable. |
 | `endCallFunctionEnabled` | `true` | Lets the model hang up deliberately. Phrase matching alone left the line open — see § 2.9. |
@@ -893,16 +927,55 @@ Design points that keep the bonus from breaking the core path:
 The offer wording is the challenge's own: *"It looks like we already have a record for [First]
 [Last]. Would you like to update your information instead?"*
 
-## 2.12 Still deliberately left out
+## 2.12 Appointment scheduling — after the save, never before
+
+Scheduling is a bonus. It is wired so that it cannot cost anything on the path that actually
+matters.
+
+**Why it sits after `create_patient` and not before.** The worst outcome this prompt defends against
+is a caller who believes they are registered when nothing was written — that is the Call-2
+regression documented in § 2.9, where the model treated a confirmed read-back as a finished call.
+Anything that competes for the model's attention around the save is a risk to it. So the offer is
+placed strictly inside step 3 of the hard gate, on the far side of a successful write. It also
+cannot physically happen earlier: both tools require the `patient_id` that only `create_patient`
+returns.
+
+**Why the model must copy `slot_id` verbatim.** The server resolves a slot by *membership* of the
+set it just offered, not by parsing the id into a date. A parse would accept a well-formed id for a
+Sunday, for last month, or for three in the morning; membership accepts none of those. The
+consequence for the prompt is that an invented, reformatted or remembered-from-earlier slot_id is
+always wrong, so the instruction is phrased as "character for character" rather than as a
+suggestion.
+
+**Why the times come from a tool at all, rather than from this prompt.** Rule 5: a deterministic
+transform belongs in code. Had the prompt said "offer the next three weekdays at nine", every call
+would depend on the model doing date arithmetic, weekend-skipping and formatting correctly, and no
+test could pin the answer. `getAvailableSlots` is pure with an injected clock, so the same input
+gives the same three slots in a unit test and on a live call.
+
+**Why an expired slot is a field failure, not an outage.** The offered set rolls over at UTC
+midnight, so a call spanning it can be offered a time and then have it refused a moment later. That
+returns a bare `error` with no inline `request-failed` message, which by § 2.7 means the model
+writes its own recovery line — here, re-offering the new times. Giving it the canned infrastructure
+apology would tell the caller the system is broken when it simply moved on a day.
+
+**Why exactly one offer.** § 2.9 established that the ending must not trap the caller in a loop they
+escape twice. Adding a second question at the end is the obvious way to reintroduce that bug, so the
+ending is capped at two questions total: appointment, then anything-else, each asked once.
+
+**Not built:** rescheduling, cancelling, and any real clinic calendar. The slots are mock
+availability with no capacity model — two callers can be given the same time, because there is no
+booking system behind this to conflict with.
+
+## 2.13 Still deliberately left out
 
 - **Spanish.** It is a `transcriber`/`voice` change plus a prompt branch, and it
   cannot be half-done — a model that switches language mid-call without matching TTS produces
   Spanish text in an English voice.
-- **Appointment scheduling.** Post-registration bonus, separate tool.
 - **Explicit consent/HIPAA language.** The challenge FAQ: *"Do I need to handle HIPAA compliance?
   No."*
 
-## 2.13 Known limitations
+## 2.14 Known limitations
 
 - The prompt assumes one patient per call. A caller registering a child, or two people on one call,
   is undefined behaviour — the model will most likely collect one record and ignore the second
@@ -915,6 +988,10 @@ The offer wording is the challenge's own: *"It looks like we already have a reco
 - The "never re-ask" rule is a soft constraint on model memory, not enforced state. Over a long call
   with several corrections, drift is possible. The read-back is the backstop and is the reason it
   is non-negotiable.
+- The appointment offer has **not been verified on a live call**. The tool path is covered by tests,
+  but whether Nora offers it naturally, and whether the three spoken times land intelligibly over
+  phone audio, is unproven until someone dials. Both regressions that ever reached a real caller
+  were prompt-induced and invisible to a fully green suite.
 - Every example phone number here is `902-555-0147`, which is fictional and passes the NANP rule
   `^[2-9]\d{2}[2-9]\d{6}$`. Note that `555-123-4567`, used in `docs/handoff/phase-2.md` § 3.0 and
   § 3.3, is **rejected** by the project's own validator — its exchange code starts with `1`. Do not
