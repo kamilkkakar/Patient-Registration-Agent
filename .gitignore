@@ -41,15 +41,8 @@ Thumbs.db
 prisma/*.db
 prisma/*.db-journal
 
-
 # Misc local noise
 *.local
 .tmp/
 .tmp-*
 .cache/
-REQUIRED_CONTENTS.md
-SUBMISSION.md
-docker-compose.yml
-compose.yml
-docker-compose.yaml
-scripts/smoke-live.mjs
