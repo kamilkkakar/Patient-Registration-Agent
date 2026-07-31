@@ -136,21 +136,20 @@ Spoken forms are normalized in `src/normalize/` (covered by unit tests):
 
 ## Local setup
 
-**Needs:** Node ≥ 20, Docker, a [Vapi](https://vapi.ai) account (for the phone path).
+**Needs:** Node ≥ 20, a reachable Postgres, and a [Vapi](https://vapi.ai) account (for the phone path).
 
 ```bash
 git clone https://github.com/kamilkkakar/Patient-Registration-Agent.git
 cd Patient-Registration-Agent
 
 npm ci --ignore-scripts
-cp .env.example .env          # fill in values (never commit .env)
-npm run db:up                 # Postgres on host port 55432
+cp .env.example .env          # set DATABASE_URL (and Vapi vars for the phone path)
 npx prisma migrate deploy
 npm run db:seed               # two fictional demo patients
 npm run dev
 ```
 
-> Local Postgres is on **55432**, not 5432, so a native Postgres on the default port cannot shadow the container.
+> Point `DATABASE_URL` at any Postgres instance. Production uses Railway’s managed database.
 
 ### Environment
 
@@ -174,7 +173,7 @@ node scripts/create-assistant.mjs
 ### Tests
 
 ```bash
-npm run db:up
+# Requires DATABASE_URL pointing at a real Postgres
 npm test
 npm run typecheck
 ```

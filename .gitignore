@@ -58,3 +58,6 @@ Voice AI Agent Coding Challenge*.pdf
 .cache/
 REQUIRED_CONTENTS.md
 SUBMISSION.md
+docker-compose.yml
+compose.yml
+docker-compose.yaml
