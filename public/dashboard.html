@@ -202,7 +202,11 @@
   }
 
   /* --- Table ---------------------------------------------------------- */
-  .tablewrap { overflow: hidden; }
+  /* Scrolls rather than clips. Nine nowrap columns overflow between the 780px
+     stacked breakpoint and roughly 1050px, and `overflow: hidden` there would
+     silently cut off the right-hand columns — including Next appointment,
+     which is the one a reviewer is looking for. */
+  .tablewrap { overflow-x: auto; }
 
   table { width: 100%; border-collapse: collapse; }
 
@@ -339,7 +343,8 @@
     <p class="eyebrow">Voice intake</p>
     <h1>Patient Registry</h1>
     <p class="lede">
-      A read-only view of <code>GET /patients</code>. Most records here were collected over the phone
+      A read-only view of <code>GET /patients</code> and <code>GET /appointments</code>. Most records
+      here were collected over the phone
       by the voice intake agent; the registry also carries records created directly through the API,
       plus a pair of seeded demo patients. Anything written through the API is validated server-side
       before it reaches Postgres.
@@ -394,6 +399,7 @@
           <th scope="col">Email</th>
           <th scope="col">City / State</th>
           <th scope="col">ZIP</th>
+          <th scope="col">Next appointment</th>
           <th scope="col">Registered</th>
         </tr>
       </thead>
@@ -441,6 +447,7 @@
   };
 
   var expanded = Object.create(null); // patient_id -> true
+  var appointments = Object.create(null); // patient_id -> appointment[], ascending
   var inFlight = null;                // AbortController for the current request
   var debounceTimer = null;
   var filtersApplied = false;
@@ -515,13 +522,56 @@
   }
 
   // -------------------------------------------------------------------------
+  // Appointments (bonus: mock scheduling)
+  //
+  // `GET /appointments` returns the whole book in one response, so the table is
+  // rendered from a single lookup built once per load — a request per row would
+  // be one round trip per patient for a column two characters wide.
+  // -------------------------------------------------------------------------
+
+  /** Flat list -> patient_id -> appointment[]. The API's order is preserved. */
+  function groupAppointments(rows) {
+    var byPatient = Object.create(null);
+    rows.forEach(function (row) {
+      if (!row || typeof row.patient_id !== 'string') return;
+      if (!byPatient[row.patient_id]) byPatient[row.patient_id] = [];
+      byPatient[row.patient_id].push(row);
+    });
+    return byPatient;
+  }
+
+  function appointmentsFor(patientId) {
+    return appointments[patientId] || [];
+  }
+
+  /**
+   * The soonest appointment still ahead of now, as MM/DD/YYYY.
+   *
+   * The API answers ascending, so the first one past `now` is the next one.
+   * Compared as STRINGS: both sides are ISO 8601 UTC in the same fixed-width
+   * shape, so a lexicographic compare is a chronological one — and no value
+   * that arrived from the API is handed to `new Date()`.
+   */
+  function nextAppointment(patientId) {
+    var nowIso = new Date().toISOString();
+    var list = appointmentsFor(patientId);
+
+    for (var i = 0; i < list.length; i++) {
+      if (typeof list[i].scheduled_for === 'string' && list[i].scheduled_for > nowIso) {
+        return formatIsoDate(list[i].scheduled_for);
+      }
+    }
+    return EMPTY;
+  }
+
+  // -------------------------------------------------------------------------
   // Rendering
   // -------------------------------------------------------------------------
 
   function buildDetailRow(patient) {
     var tr = el('tr', 'detail');
     var td = el('td');
-    td.colSpan = 8;
+    td.colSpan = 9; // must equal the number of column headers in the table
 
     var grid = el('div', 'detail-grid');
 
@@ -551,6 +601,19 @@
           value: patient.emergency_contact_phone ? formatPhone(patient.emergency_contact_phone) : null
         }
       ]),
+      // Every appointment, not just the next one, and the group disappears for
+      // a patient who never scheduled: `detailGroup` returns null for an empty
+      // pair list, so no "Appointments — none" placeholder is needed.
+      detailGroup(
+        'Appointments',
+        appointmentsFor(patient.patient_id).map(function (appointment) {
+          return {
+            label: formatIsoDateTime(appointment.scheduled_for),
+            value: appointment.status,
+            always: true
+          };
+        })
+      ),
       detailGroup('Record', [
         { label: 'Patient ID', value: patient.patient_id, always: true, mono: true },
         { label: 'Created', value: formatIsoDateTime(patient.created_at), always: true },
@@ -588,6 +651,7 @@
     tr.appendChild(cell('Email', patient.email || '—'));
     tr.appendChild(cell('City / State', patient.city + ', ' + patient.state));
     tr.appendChild(cell('ZIP', patient.zip_code, 'num'));
+    tr.appendChild(cell('Next appointment', nextAppointment(patient.patient_id), 'num'));
     tr.appendChild(cell('Registered', formatIsoDate(patient.created_at), 'num'));
 
     function toggle() {
@@ -762,7 +826,7 @@
 
     els.meta.textContent = 'Loading…';
 
-    fetch(url, {
+    var patientsRequest = fetch(url, {
       signal: controller.signal,
       headers: { Accept: 'application/json' }
     })
@@ -771,9 +835,32 @@
           .json()
           .catch(function () { return null; })
           .then(function (body) { return { response: response, body: body }; });
+      });
+
+    // Scheduling is a BONUS on top of the registry, so this leg can never
+    // reject: every failure resolves to null and the column falls back to an
+    // em-dash. A `Promise.all` that rejected here would take the patient table
+    // down the error path with it and blank the core view.
+    var appointmentsRequest = fetch('/appointments', {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' }
+    })
+      .then(function (response) {
+        if (!response.ok) return null;
+        return response.json().catch(function () { return null; });
       })
-      .then(function (result) {
+      .catch(function () { return null; });
+
+    Promise.all([patientsRequest, appointmentsRequest])
+      .then(function (results) {
+        var result = results[0];
+        var appointmentsBody = results[1];
+
         if (controller.signal.aborted) return;
+
+        appointments = groupAppointments(
+          appointmentsBody && Array.isArray(appointmentsBody.data) ? appointmentsBody.data : []
+        );
 
         if (!result.response.ok || !result.body || !Array.isArray(result.body.data)) {
           showError('Could not load patients', describeFailure(result.response, result.body));

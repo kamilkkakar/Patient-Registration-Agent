@@ -190,3 +190,22 @@ export async function listAppointmentsForPatient(patientId: string): Promise<App
     orderBy: { scheduledFor: 'desc' },
   });
 }
+
+/**
+ * Every appointment in the registry, soonest first.
+ *
+ * The soft-delete rule travels as a RELATION filter, so a tombstoned patient's
+ * appointments never leave Postgres. Fetching everything and dropping the dead
+ * ones in JS would give the same answer today and the wrong one the moment the
+ * query grows a `take` — the rule has to be part of the predicate.
+ *
+ * Ascending, unlike `listAppointmentsForPatient`. That view answers "what was
+ * booked", newest first; this one answers "what is coming up", which is the
+ * order the dashboard reads to find each patient's next appointment.
+ */
+export async function listAllAppointments(): Promise<Appointment[]> {
+  return prisma.appointment.findMany({
+    where: { patient: { deletedAt: null } },
+    orderBy: { scheduledFor: 'asc' },
+  });
+}

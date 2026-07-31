@@ -144,6 +144,23 @@ describe('public/dashboard.html', () => {
     expect(source).toMatch(/hintLastName\.textContent\s*=\s*'[^']+'/);
   });
 
+  it('spans the expanded detail row across every column in the header', async () => {
+    // The detail row's `colSpan` is a hard-coded literal, so adding a column to
+    // the header without touching it leaves the expanded panel one cell short —
+    // a purely visual break that no HTTP test can see.
+    const source = await readFile(DASHBOARD_PATH, 'utf8');
+
+    // Counted inside <thead> only, so a `<th>` mentioned in a comment further
+    // down the file cannot move the number.
+    const thead = /<thead>([\s\S]*?)<\/thead>/.exec(source);
+    const columns = thead?.[1]?.match(/<th\b[^>]*>/g) ?? [];
+    const colSpan = /td\.colSpan\s*=\s*(\d+)/.exec(source);
+
+    expect(columns.length).toBeGreaterThan(0);
+    expect(colSpan).not.toBeNull();
+    expect(Number(colSpan?.[1])).toBe(columns.length);
+  });
+
   it('does not claim every record was collected over the phone', async () => {
     // False for the seeded demo patients and for anything created through
     // `POST /patients`, both of which show up in this same table.

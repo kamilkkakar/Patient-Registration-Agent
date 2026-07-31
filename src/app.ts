@@ -13,6 +13,7 @@ import { logger } from './lib/logger.js';
 import { registerErrorHandler } from './lib/error-handler.js';
 import { ERROR_CODES, fail } from './lib/envelope.js';
 import { patientRoutes } from './routes/patients.js';
+import { appointmentRoutes } from './routes/appointments.js';
 import { healthRoutes } from './routes/health.js';
 import { dashboardRoutes } from './routes/dashboard.js';
 import { vapiRoutes } from './vapi/routes.js';
@@ -99,6 +100,7 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   await app.register(healthRoutes);
   await app.register(patientRoutes);
+  await app.register(appointmentRoutes);
   // The dashboard adds exactly two GET routes and no wildcard, so it cannot
   // shadow anything above it — see the header of routes/dashboard.ts.
   await app.register(dashboardRoutes);
