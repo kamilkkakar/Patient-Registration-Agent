@@ -62,3 +62,4 @@ SUBMISSION.md
 docker-compose.yml
 compose.yml
 docker-compose.yaml
+scripts/smoke-live.mjs
