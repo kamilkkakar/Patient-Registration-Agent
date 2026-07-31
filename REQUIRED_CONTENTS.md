@@ -23,6 +23,7 @@ Scope: what must stay in git for the **Voice AI patient registration agent** (AP
 | `.gitignore` | Keeps secrets and junk out of git |
 | `README.md` | Setup, live URLs, architecture (challenge submission requirement) |
 | `REQUIRED_CONTENTS.md` | This inventory |
+| `SUBMISSION.md` | Reviewer pack: repo, phone, API, verification steps |
 | `tests/` | Voice + API regression suite — pins contracts the phone agent depends on |
 | `vitest.config.ts` | Test runner (`npm test`) |
 | `docker-compose.yml` | Local Postgres for tests (`localhost:55432`) |
