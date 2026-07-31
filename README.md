@@ -179,6 +179,12 @@ npm test
 npm run typecheck
 ```
 
+Live production smoke (health, assistant wiring, spoken create/update/delete via `/vapi/tool`):
+
+```bash
+node scripts/smoke-live.mjs
+```
+
 ---
 
 ## Known limitations
