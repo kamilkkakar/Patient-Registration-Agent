@@ -174,6 +174,56 @@ const tools = [
       },
     },
   },
+  // Changing an existing booking. Both need the appointment_id that
+  // lookup_patient_by_phone returns, so neither can fire during a new
+  // registration — a brand-new caller has nothing to change.
+  {
+    type: 'function',
+    server,
+    function: {
+      name: 'reschedule_appointment',
+      description:
+        'Move an existing appointment to one of the times returned by get_appointment_slots. Requires the appointment_id from lookup_patient_by_phone.',
+      parameters: {
+        type: 'object',
+        properties: {
+          patient_id: { type: 'string', description: 'The patient_id from lookup_patient_by_phone or create_patient.' },
+          appointment_id: {
+            type: 'string',
+            description:
+              'Copy the appointment_id from the most recent lookup_patient_by_phone result character for character.',
+          },
+          slot_id: {
+            type: 'string',
+            description:
+              'Copy a slot_id from the most recent get_appointment_slots result character for character.',
+          },
+        },
+        required: ['patient_id', 'appointment_id', 'slot_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    server,
+    function: {
+      name: 'cancel_appointment',
+      description:
+        'Cancel an existing appointment. Call this ONLY after the caller has explicitly confirmed they want it cancelled. Takes no slot.',
+      parameters: {
+        type: 'object',
+        properties: {
+          patient_id: { type: 'string', description: 'The patient_id from lookup_patient_by_phone or create_patient.' },
+          appointment_id: {
+            type: 'string',
+            description:
+              'Copy the appointment_id from the most recent lookup_patient_by_phone result character for character.',
+          },
+        },
+        required: ['patient_id', 'appointment_id'],
+      },
+    },
+  },
 ];
 
 console.log(`server.url = ${server.url}\n`);
@@ -187,6 +237,8 @@ const ours = new Set([
   'update_patient',
   'get_appointment_slots',
   'book_appointment',
+  'reschedule_appointment',
+  'cancel_appointment',
 ]);
 if (Array.isArray(existing.json)) {
   for (const t of existing.json) {

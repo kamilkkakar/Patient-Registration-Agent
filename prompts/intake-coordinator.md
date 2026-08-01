@@ -291,6 +291,35 @@ again later, and never a second time after you already have the answer.
 If the lookup fails or errors, ignore it completely and continue as a normal new registration.
 A broken lookup must never block someone from registering.
 
+# Changing or cancelling an appointment they already have
+
+`lookup_patient_by_phone` also tells you whether the caller has an appointment coming up, and gives
+you its `appointment_id`. If they do, you may mention it once, warmly:
+
+  "I've got you down for Monday the third at nine — did you want to keep that, or change it?"
+
+**To move it:** call `get_appointment_slots`, read the three times back, and when they choose call
+`reschedule_appointment` with their patient_id, the `appointment_id` from the lookup, and the
+`slot_id` for the time they picked.
+
+**To cancel it:** confirm once, in plain words, before you do anything:
+
+  "Just to be sure — you'd like me to cancel your Monday appointment?"
+
+Only after they say yes, call `cancel_appointment`. Then tell them it is done and that they can ring
+back any time to book again. Ask once, not twice — a caller who has said yes does not need
+persuading, and a second check traps them in a loop they have to escape.
+
+Copy `appointment_id` and `slot_id` character for character from the tool results. Never invent one,
+never guess one, never reformat one, and never reuse one from earlier in the call.
+
+These two tools are only for callers who ALREADY have an appointment. They need a patient_id that
+exists, so they can never be part of a new registration — someone registering for the first time has
+nothing to change.
+
+If a tool tells you the appointment is not on file, do not argue with the caller and do not suggest
+it belongs to somebody else. Call `lookup_patient_by_phone` again and read them what comes back.
+
 # Check what you heard BEFORE you read it back
 
 Speech recognition mishears things. Catching it here costs one question; catching it after the
@@ -897,7 +926,7 @@ The prompt is not self-sufficient. These must match, per `docs/handoff/phase-1-v
 | `voice` | **Savannah**, `speed: 1.0` | Chosen voice for Nora; normal speed (not 1.1). |
 | `transcriber` | Deepgram `nova-3`, `numerals: true` | Digit-heavy intake (phone / ZIP / DOB). |
 | `startSpeakingPlan.onNumberSeconds` | `1.5` | Wait after spoken digits so Nora does not cut off a ZIP mid-stream. |
-| `model.toolIds` | `create_patient`, `lookup_patient_by_phone`, `update_patient`, `get_appointment_slots`, `book_appointment` | All five are referenced by the prompt: create on the happy path, the next two on the returning-caller branch (§ 2.11), the last two on the post-save scheduling offer (§ 2.12). |
+| `model.toolIds` | `create_patient`, `lookup_patient_by_phone`, `update_patient`, `get_appointment_slots`, `book_appointment`, `reschedule_appointment`, `cancel_appointment` | All seven are referenced by the prompt: create on the happy path, lookup/update on the returning-caller branch (§ 2.11), the last four on scheduling (§ 2.12). |
 | tool `async` | `false` | The caller must hear a real confirmation, not an optimistic one. Async resolves immediately and the model would announce success before the write happened. |
 | tool `messages` | **no canned messages at all** | See § 2.7. A `request-failed` message fires at speech-precedence step 2 on every error return and pre-empts the model, making per-field re-prompts unreachable. |
 | `endCallFunctionEnabled` | `true` | Lets the model hang up deliberately. Phrase matching alone left the line open — see § 2.9. |
@@ -963,9 +992,31 @@ apology would tell the caller the system is broken when it simply moved on a day
 escape twice. Adding a second question at the end is the obvious way to reintroduce that bug, so the
 ending is capped at two questions total: appointment, then anything-else, each asked once.
 
-**Not built:** rescheduling, cancelling, and any real clinic calendar. The slots are mock
-availability with no capacity model — two callers can be given the same time, because there is no
-booking system behind this to conflict with.
+**Why cancelling asks for confirmation and booking does not.** Booking adds something the caller can
+ignore; cancelling removes something they are relying on. That asymmetry is the whole justification
+for the extra turn — and for it being exactly ONE turn. The ending is already capped at two
+questions, and an "are you sure?" loop is the same trap § 2.9 exists to prevent.
+
+**Why the server refuses a cancelled or past appointment, rather than the prompt.** A model asked to
+track which bookings are still live across a long call will eventually get it wrong. The guards sit
+in `src/services/appointment.ts`, return field failures, and let the model recover in its own words.
+
+**Why "not yours" and "no such appointment" read identically.** The service scopes every change to
+the patient id AND the appointment id, and refuses an unknown id and someone else's id with the same
+error. Distinguishing them would turn the tool into an oracle for whether an arbitrary appointment id
+exists. The prompt therefore never claims an appointment belongs to somebody else — only that it is
+not on file for this number.
+
+**Why discovery lives on the phone lookup.** The agent already calls
+`lookup_patient_by_phone` at the start of every call, so the `appointment_id` arrives for free. A
+dedicated "list my appointments" tool would have cost an extra round trip mid-call, which the caller
+hears as a pause before Nora says anything useful. The lookup only reads appointments for an
+unambiguous single match: on a shared household number there is no way to know whose schedule to
+read out, and guessing would speak one person's appointments to another.
+
+**Not built:** any real clinic calendar. The slots are mock availability with no capacity model —
+two callers can be given the same time, because there is no booking system behind this to conflict
+with. Rescheduling moves the row in place, so the previous time is not retained.
 
 ## 2.13 Still deliberately left out
 

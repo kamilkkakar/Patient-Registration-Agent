@@ -24,14 +24,16 @@
 
 import { z } from 'zod';
 import { zodIssuesToDetails } from '../lib/envelope.js';
-import { NotFoundError } from '../lib/errors.js';
+import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { formatDob } from '../lib/serialize.js';
 import { normalizePhone } from '../normalize/index.js';
 import * as appointmentService from '../services/appointment.js';
 import * as patientService from '../services/patient.js';
 import {
   bookAppointmentSchema,
+  cancelAppointmentSchema,
   getAppointmentSlotsSchema,
+  rescheduleAppointmentSchema,
 } from '../validation/appointment.js';
 import {
   createPatientSchema,
@@ -203,9 +205,38 @@ async function lookupPatientByPhone(args: ToolCallArgs): Promise<ToolOutcome> {
         ? ` Plus ${String(patients.length - shown.length)} more — ask the caller for their name to narrow it down.`
         : '';
 
+    // Upcoming bookings ride along on the lookup the agent already makes at the
+    // start of every call, so changing an appointment costs no extra round trip
+    // — which the caller would hear as a pause before Nora says anything useful.
+    //
+    // ONLY for an unambiguous single match. On a shared household number there
+    // is no way to know whose appointments to read out, and guessing would speak
+    // one person's schedule to another.
+    const only = patients.length === 1 ? patients[0] : undefined;
+    let upcoming = '';
+
+    if (only !== undefined) {
+      // Capped like the match list above, and for the same reason: this string is
+      // read by a model on a token budget (§ G14), and a patient with a long tail
+      // of bookings would push the rest of the result out of usefulness.
+      const appointments = (
+        await appointmentService.listUpcomingAppointmentsForPatient(only.patientId, new Date())
+      ).slice(0, MAX_LOOKUP_MATCHES);
+
+      upcoming =
+        appointments.length === 0
+          ? ' No upcoming appointments.'
+          : ` Upcoming: ${appointments
+              .map(
+                (appointment) =>
+                  `${appointmentService.formatSpokenTime(appointment.scheduledFor)} — appointment_id ${appointment.id}`,
+              )
+              .join('; ')}.`;
+    }
+
     return {
       result: oneLine(
-        `Found ${String(patients.length)} patient${patients.length === 1 ? '' : 's'}: ${listed}.${overflow}`,
+        `Found ${String(patients.length)} patient${patients.length === 1 ? '' : 's'}: ${listed}.${overflow}${upcoming}`,
       ),
     };
   } catch {
@@ -275,6 +306,7 @@ function appointmentArgsError(issues: readonly z.ZodIssue[]): string {
   const fields = new Set(zodIssuesToDetails(issues).map((detail) => detail.field));
 
   if (fields.has('slot_id')) return SLOT_ID_UNKNOWN;
+  if (fields.has('appointment_id')) return APPOINTMENT_UNKNOWN;
   if (fields.has('patient_id')) return PATIENT_ID_INVALID;
   return issuesToError(issues);
 }
@@ -340,6 +372,77 @@ async function bookAppointment(args: ToolCallArgs): Promise<ToolOutcome> {
   }
 }
 
+/**
+ * Deliberately says "not on file for this patient" and never "that belongs to
+ * someone else". The service refuses an unknown id and another patient's id
+ * identically, and this string must not leak the difference the query hides.
+ */
+const APPOINTMENT_UNKNOWN =
+  'No appointment with that id is on file for this patient; call lookup_patient_by_phone again and read the caller what it returns.';
+
+async function rescheduleAppointment(args: ToolCallArgs): Promise<ToolOutcome> {
+  const parsed = rescheduleAppointmentSchema.safeParse(args);
+
+  if (!parsed.success) {
+    return fieldFailure(appointmentArgsError(parsed.error.issues));
+  }
+
+  // ONE clock read for the whole handler, same as book_appointment: re-reading
+  // it could straddle the UTC-midnight rollover of the offered set and move the
+  // booking to a slot that was never validated.
+  const now = new Date();
+  const slot = appointmentService.findSlotById(parsed.data.slot_id, now);
+
+  if (slot === null) {
+    return fieldFailure(SLOT_ID_UNKNOWN);
+  }
+
+  try {
+    await appointmentService.rescheduleAppointment({
+      appointmentId: parsed.data.appointment_id,
+      patientId: parsed.data.patient_id,
+      scheduledFor: slot.scheduledFor,
+      now,
+    });
+
+    return { result: oneLine(`Rescheduled. New appointment on ${slot.spokenTime}.`) };
+  } catch (error) {
+    // Unknown patient, unknown appointment, someone else's appointment: all the
+    // caller's problem to resolve conversationally, none an outage.
+    if (error instanceof NotFoundError) return fieldFailure(APPOINTMENT_UNKNOWN);
+    if (error instanceof ValidationError) return fieldFailure(oneLine(error.message));
+    return infraFailure('The appointment could not be changed because the record store is unavailable.');
+  }
+}
+
+async function cancelAppointment(args: ToolCallArgs): Promise<ToolOutcome> {
+  const parsed = cancelAppointmentSchema.safeParse(args);
+
+  if (!parsed.success) {
+    return fieldFailure(appointmentArgsError(parsed.error.issues));
+  }
+
+  try {
+    const cancelled = await appointmentService.cancelAppointment({
+      appointmentId: parsed.data.appointment_id,
+      patientId: parsed.data.patient_id,
+      now: new Date(),
+    });
+
+    // Say which time was released. "Cancelled." alone leaves a caller who has
+    // two bookings unsure which one just went.
+    return {
+      result: oneLine(
+        `Cancelled the appointment on ${appointmentService.formatSpokenTime(cancelled.scheduledFor)}.`,
+      ),
+    };
+  } catch (error) {
+    if (error instanceof NotFoundError) return fieldFailure(APPOINTMENT_UNKNOWN);
+    if (error instanceof ValidationError) return fieldFailure(oneLine(error.message));
+    return infraFailure('The appointment could not be cancelled because the record store is unavailable.');
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
@@ -352,6 +455,8 @@ const HANDLERS: Record<string, ToolHandler | undefined> = {
   update_patient: updatePatient,
   get_appointment_slots: getAppointmentSlots,
   book_appointment: bookAppointment,
+  reschedule_appointment: rescheduleAppointment,
+  cancel_appointment: cancelAppointment,
 };
 
 export const TOOL_NAMES: readonly string[] = Object.keys(HANDLERS);

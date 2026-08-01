@@ -169,3 +169,45 @@ describe('public/dashboard.html', () => {
     expect(source).not.toMatch(/Every record below was collected over the phone/i);
   });
 });
+
+describe('dashboard-helpers.js', () => {
+  it('is served on the same origin as the page', async () => {
+    // WHY: the page loads it with <script src>. If this route is missing the
+    // dashboard throws on `window.DashboardHelpers` and renders nothing — a
+    // failure no other test here would catch, because they all read the file
+    // from disk rather than over HTTP.
+    const res = await api(app).get('/dashboard-helpers.js');
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('DashboardHelpers');
+  });
+
+  it('makes no external requests', async () => {
+    // Same constraint as the page: a CDN link only fails in a browser, on a
+    // reviewer's machine, offline.
+    const source = await readFile(
+      path.resolve(import.meta.dirname, '../../public/dashboard-helpers.js'),
+      'utf8',
+    );
+
+    expect(source).not.toMatch(/https?:\/\//);
+  });
+
+  it('is referenced by the page before the inline script runs', async () => {
+    // Order matters: the inline script binds EMPTY from the helpers at the top
+    // of its IIFE, so a <script src> placed after it would throw.
+    const page = await readFile(DASHBOARD_PATH, 'utf8');
+
+    expect(page.indexOf('dashboard-helpers.js')).toBeLessThan(page.indexOf('var helpers = window.DashboardHelpers'));
+  });
+});
+
+it('shows when a booking was made, not only when it is for', async () => {
+  // WHY: created_at (the caller rang in) and scheduled_for (the appointment) are
+  // different facts. The detail row previously showed only the second, so a
+  // reviewer could not tell a booking made this morning from one made in June.
+  const source = await readFile(DASHBOARD_PATH, 'utf8');
+
+  expect(source).toContain('appointment.created_at');
+  expect(source).toContain('booked ');
+});

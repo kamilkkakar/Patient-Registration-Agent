@@ -420,11 +420,15 @@
 
 </div>
 
+<script src="/dashboard-helpers.js"></script>
 <script>
 (function () {
   'use strict';
 
-  var EMPTY = '—'; // em dash, used wherever an optional field is null
+  // Pure helpers live in dashboard-helpers.js so a unit test can execute them.
+  // Bound here, before first use: EMPTY is referenced throughout this file.
+  var helpers = window.DashboardHelpers;
+  var EMPTY = helpers.EMPTY; // em dash, used wherever an optional field is null
   var DEBOUNCE_MS = 300;
 
   var els = {
@@ -464,12 +468,8 @@
     return '(' + digits.slice(0, 3) + ') ' + digits.slice(3, 6) + '-' + digits.slice(6);
   }
 
-  /** ISO 8601 UTC -> MM/DD/YYYY, by slicing. No Date, so no timezone shift. */
-  function formatIsoDate(value) {
-    if (typeof value !== 'string') return EMPTY;
-    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
-    return m ? m[2] + '/' + m[3] + '/' + m[1] : value;
-  }
+  /** ISO 8601 UTC -> MM/DD/YYYY. Shared with the unit test — see dashboard-helpers.js. */
+  var formatIsoDate = helpers.formatIsoDate;
 
   /** ISO 8601 UTC -> MM/DD/YYYY HH:MM UTC, for the detail panel. */
   function formatIsoDateTime(value) {
@@ -530,38 +530,21 @@
   // -------------------------------------------------------------------------
 
   /** Flat list -> patient_id -> appointment[]. The API's order is preserved. */
-  function groupAppointments(rows) {
-    var byPatient = Object.create(null);
-    rows.forEach(function (row) {
-      if (!row || typeof row.patient_id !== 'string') return;
-      if (!byPatient[row.patient_id]) byPatient[row.patient_id] = [];
-      byPatient[row.patient_id].push(row);
-    });
-    return byPatient;
-  }
+  var groupAppointments = helpers.groupAppointments;
 
   function appointmentsFor(patientId) {
     return appointments[patientId] || [];
   }
 
   /**
-   * The soonest appointment still ahead of now, as MM/DD/YYYY.
+   * The soonest LIVE appointment still ahead of now, as MM/DD/YYYY.
    *
-   * The API answers ascending, so the first one past `now` is the next one.
-   * Compared as STRINGS: both sides are ISO 8601 UTC in the same fixed-width
-   * shape, so a lexicographic compare is a chronological one — and no value
-   * that arrived from the API is handed to `new Date()`.
+   * The status filter lives in dashboard-helpers.js and is unit-tested there: a
+   * cancelled booking must not display as the patient's next appointment. Only
+   * the clock read stays here, because it is the one impure part.
    */
   function nextAppointment(patientId) {
-    var nowIso = new Date().toISOString();
-    var list = appointmentsFor(patientId);
-
-    for (var i = 0; i < list.length; i++) {
-      if (typeof list[i].scheduled_for === 'string' && list[i].scheduled_for > nowIso) {
-        return formatIsoDate(list[i].scheduled_for);
-      }
-    }
-    return EMPTY;
+    return helpers.nextAppointmentFor(appointmentsFor(patientId), new Date().toISOString());
   }
 
   // -------------------------------------------------------------------------
@@ -609,7 +592,12 @@
         appointmentsFor(patient.patient_id).map(function (appointment) {
           return {
             label: formatIsoDateTime(appointment.scheduled_for),
-            value: appointment.status,
+            // Status AND the date it was booked. `created_at` is when the caller
+            // rang in; `scheduled_for` is the appointment itself. Showing only
+            // the latter left no way to tell a booking made this morning from
+            // one made months ago — and after a reschedule, created_at is the
+            // only remaining record of when the caller first got in touch.
+            value: appointment.status + ' · booked ' + formatIsoDate(appointment.created_at),
             always: true
           };
         })

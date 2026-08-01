@@ -30,6 +30,14 @@ const DASHBOARD_URLS = ['/', '/dashboard'] as const;
 export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
   await app.register(fastifyStatic, { root: PUBLIC_DIR, serve: false });
 
+  // The page's pure helpers, split out so a unit test can execute them rather
+  // than grep for them. Served explicitly for the same reason the dashboard is:
+  // `serve: false` means @fastify/static registers no routes of its own, so
+  // nothing here can shadow /patients.
+  app.get('/dashboard-helpers.js', async (_request, reply) => {
+    return reply.sendFile('dashboard-helpers.js');
+  });
+
   for (const url of DASHBOARD_URLS) {
     // Both URLs answer the same file rather than one redirecting to the other,
     // so neither is a second-class link to paste into a review.
