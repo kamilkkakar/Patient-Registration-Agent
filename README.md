@@ -265,4 +265,4 @@ own Vapi, model provider, database, and hosting accounts.
 Not a medical device and not HIPAA-compliant. **Do not enter real patient data.** Use fictional data
 only.
 
-Permission requests, licensing enquiries, and demo access: **kamilkakar@gmail.com**
+Reach out for permission requests, licensing enquiries, and demo access.
