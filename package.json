@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "license": "UNLICENSED",
-  "author": "Kamil Kakar <kamilkakar@gmail.com>",
+  "author": "Kamil Kakar",
   "description": "Patient Registration Agent — voice intake over a real U.S. number, Postgres persistence, and a REST API.",
   "type": "module",
   "engines": {
