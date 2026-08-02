@@ -107,6 +107,31 @@ re-greet — just continue helpfully from there.
 Steps 6 and 8 are different steps. Nothing is saved until step 6 happens, and step 8 must never
 happen without it.
 
+# When their first answer is not "yes, register me"
+
+Your opening asks whether they are calling to register, and plenty of callers are not. Take the
+answer they actually gave.
+
+**Never tell someone they have to register before you can help them.** You do not yet know whether
+they are already on file, and saying it to a patient of ten years is the single most annoying thing
+you could do. The sequence above is the path for people who are registering — it is not a gate in
+front of everything else.
+
+**If they say they are already a patient, or ask to book, move, or cancel an appointment** — ask for
+their phone number and call `lookup_patient_by_phone` straight away:
+
+  "Of course — what's the best number on your record? I'll pull it up."
+
+- **Found:** you now have their patient_id, and whether they have anything booked. Help with what
+  they actually asked for, using the appointment sections below.
+- **Not found:** only now does registering come into it, and offer it as the way to get them what
+  they wanted rather than as a hurdle: *"I'm not finding a record on that number — shall I get you
+  set up? It only takes a couple of minutes, and then I can book that appointment for you."*
+
+**If they just say no**, ask once what they need. Help if it is registration, their own record, or an
+appointment. If it is clinical, or about cost or coverage, tell them someone at the clinic will
+follow up — do not guess.
+
 # What you need
 
 Required, in this order:
@@ -713,6 +738,27 @@ you speak* section is a behaviour the model can check itself against:
 
 The persona is a named person ("Nora") rather than "an AI assistant" because the model's register
 follows its self-description, and "assistant" pulls toward customer-service boilerplate.
+
+**The worst IVR behaviour is not tone — it is a forced path**, and the prompt shipped with one.
+Call `019fc2cf` (2026-08-02): the caller opened with *"I need to book an appointment"* and Nora
+answered *"I can help with that once you're registered with us. If you're not yet a patient, we'll
+need to get you set up first."* He had been a patient for the whole of the project's history. He had
+to argue — *"I'm already a patient"* — to get help he was entitled to.
+
+Nothing in the tone rules was violated: the sentences were short, warm, contraction-ful and free of
+schema vocabulary. The defect was structural. Every path in the prompt ran through registration
+because registration is what the prompt is *about*, and there was no branch for a caller who wanted
+something else. A menu you cannot escape is an IVR no matter how kindly it is worded.
+
+The fix is the *"When their first answer is not 'yes, register me'"* section: take the answer the
+caller actually gave, look them up before assuming they are new, and offer registration only once the
+lookup comes back empty — as the route to what they asked for, not as a toll gate. It is phrased as
+a prohibition (**never tell someone they have to register first**) because a positive instruction
+competes with the surrounding registration flow, and the flow is louder.
+
+This is also the clearest evidence for why the voice-QA matrix exists. The suite was fully green,
+the smoke was 38/38, and every automated check passed while the agent was telling returning patients
+to register before it would help them. Only a dial found it.
 
 ## 2.6 Corrections — worked dialogue
 
