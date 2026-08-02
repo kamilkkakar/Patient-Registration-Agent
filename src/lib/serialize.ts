@@ -316,6 +316,8 @@ export interface AppointmentResponse {
   id: string;
   patient_id: string;
   scheduled_for: string;
+  /** The time it was moved away from, or `null` if it has never been moved. */
+  rescheduled_from: string | null;
   status: string;
   created_at: string;
   updated_at: string;
@@ -326,6 +328,9 @@ export function toAppointmentResponse(row: Appointment): AppointmentResponse {
     id: row.id,
     patient_id: row.patientId,
     scheduled_for: row.scheduledFor.toISOString(),
+    // Explicit null rather than an omitted key: the dashboard branches on it, and
+    // an absent field and a null one read differently in JavaScript.
+    rescheduled_from: row.rescheduledFrom === null ? null : row.rescheduledFrom.toISOString(),
     status: row.status,
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),

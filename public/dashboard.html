@@ -590,14 +590,22 @@
       detailGroup(
         'Appointments',
         appointmentsFor(patient.patient_id).map(function (appointment) {
+          // Three different facts, and they get confused for each other:
+          //   scheduled_for    the appointment
+          //   created_at       when the caller rang in to book it
+          //   rescheduled_from the day it used to be on, if it was moved
+          //
+          // A rescheduled booking is still SCHEDULED — moving one does not
+          // cancel it. Saying "moved from …" is what distinguishes it from a
+          // booking simply made at that time, which the row alone cannot show
+          // because the reschedule updates it in place.
+          var moved = typeof appointment.rescheduled_from === 'string'
+            ? ' · moved from ' + formatIsoDate(appointment.rescheduled_from)
+            : '';
+
           return {
             label: formatIsoDateTime(appointment.scheduled_for),
-            // Status AND the date it was booked. `created_at` is when the caller
-            // rang in; `scheduled_for` is the appointment itself. Showing only
-            // the latter left no way to tell a booking made this morning from
-            // one made months ago — and after a reschedule, created_at is the
-            // only remaining record of when the caller first got in touch.
-            value: appointment.status + ' · booked ' + formatIsoDate(appointment.created_at),
+            value: appointment.status + ' · booked ' + formatIsoDate(appointment.created_at) + moved,
             always: true
           };
         })

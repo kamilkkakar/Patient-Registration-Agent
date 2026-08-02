@@ -274,7 +274,13 @@ export async function rescheduleAppointment(
 
   return prisma.appointment.update({
     where: { id: existing.id },
-    data: { scheduledFor: input.scheduledFor },
+    data: {
+      scheduledFor: input.scheduledFor,
+      // Where it came FROM, so a moved booking stays legible. The update is in
+      // place, so without this the row is indistinguishable afterwards from one
+      // booked at the new time. Overwritten on each move — one hop, not a history.
+      rescheduledFrom: existing.scheduledFor,
+    },
   });
 }
 

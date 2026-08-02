@@ -187,6 +187,18 @@ model Appointment {
   // The mock slot the caller accepted.
   scheduledFor DateTime @map("scheduled_for") @db.Timestamptz(3)
 
+  /// The time this appointment was moved AWAY from, set by a reschedule.
+  ///
+  /// NULL means it has never been moved — which is why a reschedule is legible
+  /// at all: rescheduling updates `scheduled_for` in place, so without this the
+  /// row afterwards is indistinguishable from one booked at the new time.
+  ///
+  /// Holds the IMMEDIATELY previous time, not the original. Move an appointment
+  /// twice and the first time is gone. That matches the column's name and keeps
+  /// the write unconditional; a full history would be an audit table, which is
+  /// more machinery than a mock scheduler earns.
+  rescheduledFrom DateTime? @map("rescheduled_from") @db.Timestamptz(3)
+
   status AppointmentStatus @default(SCHEDULED)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)

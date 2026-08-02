@@ -70,6 +70,9 @@ describe('GET /patients/:id/appointments', () => {
       id: expect.any(String),
       patient_id: patientId,
       scheduled_for: '2026-08-12T09:00:00.000Z',
+      // Null on a booking that has never been moved. Present as a key either
+      // way, so a consumer can branch on it without checking for absence.
+      rescheduled_from: null,
       status: 'SCHEDULED',
       created_at: expect.any(String),
       updated_at: expect.any(String),

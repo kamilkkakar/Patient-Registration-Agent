@@ -79,6 +79,10 @@ describe('GET /appointments', () => {
       id: booked.id,
       patient_id: patientId,
       scheduled_for: '2026-08-10T09:00:00.000Z',
+      // Explicitly null, not absent: the dashboard branches on it to decide
+      // whether to say a booking was moved, and an omitted key would read the
+      // same as "never moved" only by accident.
+      rescheduled_from: null,
       status: 'SCHEDULED',
       created_at: expect.any(String),
       updated_at: expect.any(String),
@@ -393,5 +397,83 @@ describe('cancelAppointment', () => {
 
     expect(mine).toBeDefined();
     expect(mine?.['status']).toBe('CANCELLED');
+  });
+});
+
+describe('rescheduleAppointment records where it moved from', () => {
+  const NOW = new Date('2026-08-01T00:00:00.000Z');
+
+  it('stamps rescheduled_from with the time it was moved away from', async () => {
+    // WHY: rescheduling updates scheduled_for IN PLACE, so without this the row
+    // afterwards is indistinguishable from one booked at the new time — there is
+    // no way for the dashboard to say a booking was moved rather than made.
+    const patientId = await createPatient({ last_name: testLastName('Reschedfrom') });
+    const booked = await prisma.appointment.create({
+      data: { patientId, scheduledFor: new Date('2026-08-03T09:00:00.000Z') },
+    });
+    expect(booked.rescheduledFrom).toBeNull();
+
+    const moved = await rescheduleAppointment({
+      appointmentId: booked.id,
+      patientId,
+      scheduledFor: new Date('2026-08-05T09:00:00.000Z'),
+      now: NOW,
+    });
+
+    expect(moved.scheduledFor.toISOString()).toBe('2026-08-05T09:00:00.000Z');
+    expect(moved.rescheduledFrom?.toISOString()).toBe('2026-08-03T09:00:00.000Z');
+  });
+
+  it('keeps the IMMEDIATELY previous time when moved twice', async () => {
+    // WHY: documents the deliberate limit. The column holds one hop, not a
+    // history — a second move overwrites the first. Pinning it stops someone
+    // later reading it as "originally booked for".
+    const patientId = await createPatient({ last_name: testLastName('Reschedtwice') });
+    const booked = await prisma.appointment.create({
+      data: { patientId, scheduledFor: new Date('2026-08-03T09:00:00.000Z') },
+    });
+
+    await rescheduleAppointment({
+      appointmentId: booked.id, patientId,
+      scheduledFor: new Date('2026-08-05T09:00:00.000Z'), now: NOW,
+    });
+    const second = await rescheduleAppointment({
+      appointmentId: booked.id, patientId,
+      scheduledFor: new Date('2026-08-07T09:00:00.000Z'), now: NOW,
+    });
+
+    expect(second.scheduledFor.toISOString()).toBe('2026-08-07T09:00:00.000Z');
+    expect(second.rescheduledFrom?.toISOString()).toBe('2026-08-05T09:00:00.000Z');
+  });
+
+  it('leaves rescheduled_from alone when an appointment is cancelled', async () => {
+    // WHY: cancelling is not moving. A cancelled booking that was never
+    // rescheduled must not claim it was.
+    const patientId = await createPatient({ last_name: testLastName('Cancelnofrom') });
+    const booked = await prisma.appointment.create({
+      data: { patientId, scheduledFor: new Date('2026-08-03T09:00:00.000Z') },
+    });
+
+    const cancelled = await cancelAppointment({ appointmentId: booked.id, patientId, now: NOW });
+
+    expect(cancelled.status).toBe('CANCELLED');
+    expect(cancelled.rescheduledFrom).toBeNull();
+  });
+
+  it('exposes rescheduled_from over GET /appointments', async () => {
+    const patientId = await createPatient({ last_name: testLastName('Reschedwire') });
+    const booked = await prisma.appointment.create({
+      data: { patientId, scheduledFor: new Date('2026-08-03T09:00:00.000Z') },
+    });
+    await rescheduleAppointment({
+      appointmentId: booked.id, patientId,
+      scheduledFor: new Date('2026-08-05T09:00:00.000Z'), now: NOW,
+    });
+
+    const rows = await listAppointments();
+    const mine = rows.find((row) => row['id'] === booked.id);
+
+    expect(mine?.['rescheduled_from']).toBe('2026-08-03T09:00:00.000Z');
+    expect(mine?.['scheduled_for']).toBe('2026-08-05T09:00:00.000Z');
   });
 });

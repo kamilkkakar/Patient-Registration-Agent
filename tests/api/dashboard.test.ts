@@ -211,3 +211,15 @@ it('shows when a booking was made, not only when it is for', async () => {
   expect(source).toContain('appointment.created_at');
   expect(source).toContain('booked ');
 });
+
+it('distinguishes a moved booking from one simply made at that time', async () => {
+  // WHY: rescheduling updates scheduled_for IN PLACE and leaves the status
+  // SCHEDULED, so the row alone cannot show that a move happened. Without
+  // rescheduled_from the page would render a moved appointment identically to
+  // one booked at the new time — which is what made a reschedule look like a
+  // cancellation on the live dashboard.
+  const source = await readFile(DASHBOARD_PATH, 'utf8');
+
+  expect(source).toContain('appointment.rescheduled_from');
+  expect(source).toContain('moved from ');
+});
