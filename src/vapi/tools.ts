@@ -405,7 +405,11 @@ async function rescheduleAppointment(args: ToolCallArgs): Promise<ToolOutcome> {
       now,
     });
 
-    return { result: oneLine(`Rescheduled. New appointment on ${slot.spokenTime}.`) };
+    // "THIS appointment is now on ..." rather than "New appointment on ...".
+    // The old wording implied a second booking had been created, which is
+    // exactly the reading that led a live call to offer to cancel the
+    // "original" and destroy the caller's only appointment. Same row, moved.
+    return { result: oneLine(`Rescheduled. This appointment is now on ${slot.spokenTime}.`) };
   } catch (error) {
     // Unknown patient, unknown appointment, someone else's appointment: all the
     // caller's problem to resolve conversationally, none an outage.

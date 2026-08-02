@@ -68,7 +68,14 @@ async function api(method, path, body) {
 
 const assistant = {
   name: 'patient-intake-coordinator',
-  firstMessage: `Hello! Thanks for calling ${CLINIC_NAME} — this is ${AGENT_NAME}. I'd love to help get you registered as a new patient. Is that what you're calling about today?`,
+  // Deliberately OPEN, not "are you calling to register?".
+  //
+  // The old line assumed every caller was new, and on call 019fc2cf a patient of
+  // long standing who wanted to book an appointment was told he had to register
+  // first. A greeting that names one errand teaches the model that the errand is
+  // the only one on offer. Asking what they need costs the same breath and routes
+  // registration, appointments and everything else from the same first turn.
+  firstMessage: `Hello! Thanks for calling ${CLINIC_NAME} — this is ${AGENT_NAME}. What can I help you with today?`,
   model: {
     provider: 'openai',
     model: 'gpt-4.1-mini',
@@ -127,7 +134,16 @@ const assistant = {
   // care", which matched nothing, so the line stayed open through two more turns
   // until it happened to say "Goodbye". The caller had already said "bye bye".
   endCallFunctionEnabled: true,
-  endCallMessage: `Thanks so much for calling ${CLINIC_NAME} — take care. Goodbye!`,
+  // Blank on purpose, and sent EXPLICITLY rather than omitted: this object goes
+  // up as a PATCH, so leaving the key out would preserve whatever is already on
+  // the assistant and the fix would silently not apply.
+  //
+  // The prompt already requires the model to speak a closing line before it hangs
+  // up, so a message here plays a SECOND farewell over it — on call 019fc2e4 the
+  // caller heard "take care, goodbye, take care, goodbye". endCallPhrases below
+  // is the backstop that still catches a narrated farewell, and it adds no speech
+  // of its own.
+  endCallMessage: '',
   // Kept as a backstop for when the model narrates a farewell instead of calling
   // the hangup function. Lowercase substring matches.
   endCallPhrases: ['goodbye', 'good bye', 'bye now', 'bye bye', 'take care now', 'have a great day'],
