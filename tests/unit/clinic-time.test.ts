@@ -42,6 +42,30 @@ describe('zonedWallTimeToUtc', () => {
       expect(utcToClinicMinutes(utc, TZ)).toBe(m);
     }
   });
+
+  // WHY 2:00-7:00 AM: OPEN_MINUTES = 540 (9 AM) means the clinic never
+  // actually offers a slot this early, so every assertion above stays inside
+  // 9 AM-4:30 PM, where firstOffset === secondOffset on both 2026 transition
+  // days — the second offsetMinutesAt call never fires and a one-pass mutant
+  // (return firstGuess directly) would pass all of them unchanged. These two
+  // tests are the ones that actually require the second pass. Unreachable
+  // through today's opening hours, but the algorithm's correctness there is
+  // real and becomes load-bearing the moment those hours change.
+  it('corrects the second pass across the spring-forward gap (Mar 8, 07:00 local)', () => {
+    // 2 AM CST becomes 3 AM CDT at 08:00Z. A one-pass guess evaluates the
+    // offset before the jump and lands on 13:00Z; the second pass sees the
+    // corrected (CDT) offset and lands on 12:00Z.
+    const utc = zonedWallTimeToUtc({ year: 2026, month: 3, day: 8 }, 7 * 60, TZ);
+    expect(utc.toISOString()).toBe('2026-03-08T12:00:00.000Z');
+  });
+
+  it('corrects the second pass across the fall-back overlap (Nov 1, 02:00 local)', () => {
+    // 2 AM CDT becomes 1 AM CST at 07:00Z, so "02:00 local" is ambiguous. A
+    // one-pass guess stops at the pre-transition (CDT) reading, 07:00Z; the
+    // second pass resolves it to the post-transition (CST) reading, 08:00Z.
+    const utc = zonedWallTimeToUtc({ year: 2026, month: 11, day: 1 }, 2 * 60, TZ);
+    expect(utc.toISOString()).toBe('2026-11-01T08:00:00.000Z');
+  });
 });
 
 describe('utcToClinicDate', () => {
