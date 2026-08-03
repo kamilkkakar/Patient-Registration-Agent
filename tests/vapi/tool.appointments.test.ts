@@ -8,9 +8,17 @@
 // saving them right now" when all that happened is they picked a stale time.
 // Every case below asserts the ABSENCE of that message explicitly.
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { api, prisma, purgeTestPatients, startTestApp, testLastName, validPayload } from '../helpers.js';
+import {
+  api,
+  prisma,
+  purgeTestPatients,
+  startTestApp,
+  TEST_LAST_NAME_PREFIX,
+  testLastName,
+  validPayload,
+} from '../helpers.js';
 
 let app: FastifyInstance;
 
@@ -31,6 +39,19 @@ afterAll(async () => {
 
 beforeEach(() => {
   delete process.env.VAPI_WEBHOOK_SECRET;
+});
+
+// `get_appointment_slots` reads the real clock (no `now` injection at the tool
+// layer), so every test in this file is offered the SAME three real-world
+// instants. The partial unique index added in this task now enforces one live
+// appointment per instant, so a booking left SCHEDULED by one test would block
+// every later test that books the same offered slot — a fixture collision, not
+// a real double-booking. No test here depends on another's booking surviving,
+// so clearing appointments between tests is safe.
+afterEach(async () => {
+  await prisma.appointment.deleteMany({
+    where: { patient: { lastName: { startsWith: TEST_LAST_NAME_PREFIX } } },
+  });
 });
 
 function specShape(id: string, name: string, args: Record<string, unknown>): unknown {

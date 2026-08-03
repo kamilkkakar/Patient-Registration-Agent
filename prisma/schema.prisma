@@ -204,6 +204,11 @@ model Appointment {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
+  /// NOTE: a PARTIAL UNIQUE INDEX on (scheduled_for) WHERE status IN
+  /// ('SCHEDULED','CONFIRMED') also exists — see the
+  /// `active_slot_unique` migration. Prisma cannot express partial indexes, so
+  /// it is hand-written SQL and invisible to this file. It is what makes double
+  /// booking impossible.
   @@index([patientId])
   @@index([scheduledFor])
   @@map("appointments")

@@ -14,7 +14,7 @@
 // Assertions are by MEMBERSHIP, never by list length: the response is global, so
 // seed data and other suites' fixtures are legitimately in it.
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { NotFoundError, ValidationError } from '../../src/lib/errors.js';
 import {
@@ -29,6 +29,7 @@ import {
   prisma,
   purgeTestPatients,
   startTestApp,
+  TEST_LAST_NAME_PREFIX,
   testLastName,
   validPayload,
 } from '../helpers.js';
@@ -44,6 +45,19 @@ beforeAll(async () => {
 afterAll(async () => {
   await app.close();
   await purgeTestPatients();
+});
+
+// Most tests here pin `2026-08-03T09:00:00.000Z` (and neighbouring fixed dates)
+// directly via `prisma.appointment.create`, and no test depends on a booking
+// made by an earlier one — each creates its own patient. The partial unique
+// index added for double-booking now enforces one live appointment per
+// instant, so a row a previous test left SCHEDULED on that date would block
+// the next test's identical fixture. Clearing between tests avoids that
+// collision without touching the fixed dates the assertions read back.
+afterEach(async () => {
+  await prisma.appointment.deleteMany({
+    where: { patient: { lastName: { startsWith: TEST_LAST_NAME_PREFIX } } },
+  });
 });
 
 async function createPatient(overrides: Record<string, unknown> = {}): Promise<string> {

@@ -93,7 +93,11 @@ describe('GET /patients/:id/appointments', () => {
     const mine = await createPatient({ last_name: testLastName('Apptsmine') });
     const theirs = await createPatient({ last_name: testLastName('Apptstheirs') });
 
-    await bookAppointment({ patientId: theirs, scheduledFor: new Date('2026-08-10T09:00:00.000Z') });
+    // A distinct instant from the other tests in this file: the partial unique
+    // index now enforces one live appointment per instant, so two tests sharing
+    // a `scheduled_for` would collide with each other, not just with a real
+    // double-booking caller.
+    await bookAppointment({ patientId: theirs, scheduledFor: new Date('2026-12-16T09:00:00.000Z') });
 
     const res = await api(app).get(`/patients/${mine}/appointments`);
 
@@ -112,9 +116,10 @@ describe('GET /patients/:id/appointments', () => {
 
   it('404s on a SOFT-DELETED patient, even though the appointments still exist', async () => {
     const patientId = await createPatient({ last_name: testLastName('Apptsdeleted') });
+    // A distinct instant from the other tests in this file — see the note above.
     const booked = await bookAppointment({
       patientId,
-      scheduledFor: new Date('2026-08-10T09:00:00.000Z'),
+      scheduledFor: new Date('2026-12-17T09:00:00.000Z'),
     });
 
     expect((await api(app).delete(`/patients/${patientId}`)).status).toBe(200);
