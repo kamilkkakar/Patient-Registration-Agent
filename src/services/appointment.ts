@@ -13,7 +13,13 @@
 
 import type { Appointment } from '@prisma/client';
 import { CLINIC_TIMEZONE } from '../config/clinic.js';
-import { clinicWeekday, utcToClinicDate, utcToClinicMinutes } from '../lib/clinic-time.js';
+import {
+  addClinicDays,
+  clinicWeekday,
+  utcToClinicDate,
+  utcToClinicMinutes,
+  zonedWallTimeToUtc,
+} from '../lib/clinic-time.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { getPatientById } from './patient.js';
@@ -25,8 +31,16 @@ import { getPatientById } from './patient.js';
 /** How many slots are offered on one call. Three is what a caller can hold in their head. */
 const SLOT_COUNT = 3;
 
-/** Every mock slot is at this hour, UTC. There is no per-clinic timezone to model. */
-const SLOT_HOUR_UTC = 9;
+/**
+ * Every mock slot is at this CLINIC-LOCAL hour.
+ *
+ * Was UTC-fixed under the old premise "there is no per-clinic timezone to
+ * model" — that premise broke the moment `formatSpokenTime` started reading
+ * clinic-local time (see its doc comment): a slot built at a fixed UTC hour
+ * then spoke as 4 AM in summer. Built with `zonedWallTimeToUtc` below so the
+ * stored instant and the spoken hour agree in every season.
+ */
+const SLOT_HOUR_LOCAL_MINUTES = 9 * 60;
 
 /**
  * Hand-rolled rather than `Intl.DateTimeFormat`, for the same reason
@@ -121,17 +135,15 @@ export function formatSpokenTime(scheduledFor: Date): string {
 export function getAvailableSlots(now: Date): Slot[] {
   const slots: Slot[] = [];
 
-  const cursor = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), SLOT_HOUR_UTC),
-  );
+  let date = utcToClinicDate(now, CLINIC_TIMEZONE);
 
   while (slots.length < SLOT_COUNT) {
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    date = addClinicDays(date, 1);
 
-    const weekday = cursor.getUTCDay();
+    const weekday = clinicWeekday(date);
     if (weekday === 0 || weekday === 6) continue;
 
-    const scheduledFor = new Date(cursor.getTime());
+    const scheduledFor = zonedWallTimeToUtc(date, SLOT_HOUR_LOCAL_MINUTES, CLINIC_TIMEZONE);
     slots.push({
       slotId: formatSlotId(scheduledFor),
       scheduledFor,

@@ -12,6 +12,8 @@
 
 import { describe, expect, it } from 'vitest';
 import { findSlotById, getAvailableSlots } from '../../src/services/appointment.js';
+import { CLINIC_TIMEZONE } from '../../src/config/clinic.js';
+import { clinicWeekday, utcToClinicDate, utcToClinicMinutes } from '../../src/lib/clinic-time.js';
 import {
   cancelAppointmentSchema,
   rescheduleAppointmentSchema,
@@ -23,7 +25,9 @@ const FRIDAY_MIDDAY = new Date('2026-08-07T12:00:00.000Z');
 const SATURDAY_LATE = new Date('2026-08-08T23:30:00.000Z');
 const MONDAY_EARLY = new Date('2026-08-10T08:00:00.000Z');
 
-const NEXT_WEEK = ['2026-08-10T09:00:00.000Z', '2026-08-11T09:00:00.000Z', '2026-08-12T09:00:00.000Z'];
+// Mock slots sit at clinic-local 9 AM. August is Central Daylight Time
+// (UTC-5), so clinic-local 09:00 is 14:00 UTC.
+const NEXT_WEEK = ['2026-08-10T14:00:00.000Z', '2026-08-11T14:00:00.000Z', '2026-08-12T14:00:00.000Z'];
 
 function instants(now: Date): string[] {
   return getAvailableSlots(now).map((slot) => slot.scheduledFor.toISOString());
@@ -48,19 +52,22 @@ describe('getAvailableSlots', () => {
   });
 
   it('never offers a slot on the same day as the call, even at 08:00', () => {
-    // 09:00 is an hour away when this call lands. Offering it would book a
-    // patient into a slot they cannot reach.
+    // 09:00 local is an hour away when this call lands (08:00 UTC = 03:00
+    // Central). Offering it would book a patient into a slot they cannot reach.
     const first = instants(MONDAY_EARLY)[0];
 
-    expect(first).toBe('2026-08-11T09:00:00.000Z');
+    expect(first).toBe('2026-08-11T14:00:00.000Z');
     expect(new Date(first ?? 0).getTime()).toBeGreaterThan(MONDAY_EARLY.getTime());
   });
 
-  it('offers 09:00 UTC on a weekday, always', () => {
+  it('offers 9 AM clinic-local time on a weekday, always', () => {
+    // Was a raw `getUTCHours()` check before the clinic-local fix; the mock
+    // slot's UTC hour now moves with DST, so the clinic-local reading is the
+    // only frame the "always 9 AM" claim can be checked in.
     for (const slot of getAvailableSlots(SATURDAY_LATE)) {
-      expect(slot.scheduledFor.getUTCHours()).toBe(9);
-      expect(slot.scheduledFor.getUTCMinutes()).toBe(0);
-      expect([1, 2, 3, 4, 5]).toContain(slot.scheduledFor.getUTCDay());
+      expect(utcToClinicMinutes(slot.scheduledFor, CLINIC_TIMEZONE)).toBe(9 * 60);
+      const weekday = clinicWeekday(utcToClinicDate(slot.scheduledFor, CLINIC_TIMEZONE));
+      expect([1, 2, 3, 4, 5]).toContain(weekday);
     }
   });
 
@@ -73,33 +80,35 @@ describe('getAvailableSlots', () => {
     }
   });
 
-  it('encodes the instant in the id and reads UTC, not local time', () => {
+  it('encodes the instant in the id — the id is UTC, the slot itself is clinic-local 9 AM', () => {
+    // The id still encodes UTC (formatSlotId's contract, unchanged); what moved
+    // is which UTC hour clinic-local 9 AM falls on. August is CDT, so it's 14:00.
     expect(getAvailableSlots(FRIDAY_MIDDAY).map((slot) => slot.slotId)).toEqual([
-      'slot-2026-08-10T09:00Z',
-      'slot-2026-08-11T09:00Z',
-      'slot-2026-08-12T09:00Z',
+      'slot-2026-08-10T14:00Z',
+      'slot-2026-08-11T14:00Z',
+      'slot-2026-08-12T14:00Z',
     ]);
   });
 
   it('spells the time out for the voice model to read aloud', () => {
-    // `spokenTime` reads CLINIC-LOCAL time (formatSpokenTime, appointment.ts),
-    // not the UTC hour these ids are stored at. 09:00 UTC in August is Central
-    // Daylight Time (UTC-5), so the spoken hour is 4 AM, not 9 AM — the
-    // mismatch between "stored at 09:00 UTC" and "read aloud at 9 AM" is
-    // exactly the bug the clinic-availability feature fixed.
+    // `spokenTime` reads CLINIC-LOCAL time (formatSpokenTime, appointment.ts)
+    // and the mock catalogue now BUILDS its slot at clinic-local 9 AM
+    // (zonedWallTimeToUtc), so the two agree again: "9 AM" is what is stored
+    // and what is spoken, in every season — not just in whichever offset
+    // happens to make a UTC-fixed hour read as 9.
     expect(getAvailableSlots(FRIDAY_MIDDAY).map((slot) => slot.spokenTime)).toEqual([
-      'Monday, August 10 at 4 AM',
-      'Tuesday, August 11 at 4 AM',
-      'Wednesday, August 12 at 4 AM',
+      'Monday, August 10 at 9 AM',
+      'Tuesday, August 11 at 9 AM',
+      'Wednesday, August 12 at 9 AM',
     ]);
   });
 });
 
 describe('findSlotById', () => {
   it('resolves an id that is currently on offer', () => {
-    const slot = findSlotById('slot-2026-08-11T09:00Z', FRIDAY_MIDDAY);
+    const slot = findSlotById('slot-2026-08-11T14:00Z', FRIDAY_MIDDAY);
 
-    expect(slot?.scheduledFor.toISOString()).toBe('2026-08-11T09:00:00.000Z');
+    expect(slot?.scheduledFor.toISOString()).toBe('2026-08-11T14:00:00.000Z');
   });
 
   it('rejects a well-formed id that is NOT on offer', () => {

@@ -115,12 +115,10 @@ describe('get_appointment_slots', () => {
     // § G4: a line break in `result` is a parse error on Vapi's side.
     expect(result).not.toMatch(/[\r\n]/);
     // Spoken form, so the model can read the options out without inventing
-    // them. NOT pinned to "9 AM": the mock catalogue stores a fixed 09:00 UTC,
-    // but `spokenTime` now reads clinic-local (formatSpokenTime,
-    // appointment.ts), so the rendered hour shifts with DST across the year.
-    // This test uses the real clock, so only the SHAPE is checked here — the
-    // exact hour math is pinned against a fixed date in appointment-slots.test.ts.
-    expect(result).toMatch(/(Monday|Tuesday|Wednesday|Thursday|Friday), [A-Z][a-z]+ \d{1,2} at \d{1,2} (AM|PM)/);
+    // them. Pinned to "9 AM" year-round: the mock catalogue builds its slot at
+    // clinic-local 9 AM (zonedWallTimeToUtc), not a fixed UTC hour, so this
+    // holds regardless of DST.
+    expect(result).toMatch(/(Monday|Tuesday|Wednesday|Thursday|Friday), [A-Z][a-z]+ \d{1,2} at 9 AM/);
   });
 
   it('never offers a weekend — the mock catalogue is the one domain rule it can get right', async () => {
@@ -183,8 +181,8 @@ describe('book_appointment', () => {
     expect(status).toBe(200);
     expect(results[0]?.error).toBeUndefined();
     expect(results[0]?.message).toBeUndefined();
-    // Same "not pinned to 9 AM" reasoning as get_appointment_slots above.
-    expect(results[0]?.result).toMatch(/^Booked\. Appointment on .+ at \d{1,2} (AM|PM)\.$/);
+    // Same "pinned to 9 AM year-round" reasoning as get_appointment_slots above.
+    expect(results[0]?.result).toMatch(/^Booked\. Appointment on .+ at 9 AM\.$/);
 
     // The confirmation repeats the SAME time that was offered — a booking the
     // caller was never read is worse than no booking.
