@@ -6,7 +6,12 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { findAvailability, parseSlotId, resolveOpenSlot } from '../../src/services/availability.js';
+import {
+  clinicDayGrid,
+  findAvailability,
+  parseSlotId,
+  resolveOpenSlot,
+} from '../../src/services/availability.js';
 import { bookAppointment, formatSpokenTime } from '../../src/services/appointment.js';
 import { zonedWallTimeToUtc, utcToClinicMinutes } from '../../src/lib/clinic-time.js';
 import { CLINIC_TIMEZONE } from '../../src/config/clinic.js';
@@ -76,6 +81,63 @@ describe('findAvailability', () => {
     expect(closed.outsideClinicHours).toBe(true);
     expect(closed.dayFullyBooked).toBe(false);
     expect(closed.alternatives.length).toBeGreaterThan(0);
+  });
+
+  it('reports dayFullyBooked only when every remaining grid slot is actually taken', async () => {
+    // WHY: the ONLY state that should ever produce dayFullyBooked: true — a
+    // working day that still has slots ahead of `now`, and all 16 are booked.
+    // Nothing before fix round 2 ever drove this to true; every prior test
+    // (and the whole codebase) only asserted `false`.
+    const TUESDAY = { year: 2026, month: 12, day: 8 };
+    const patientId = await createPatient('Availfullybooked');
+    for (const instant of clinicDayGrid(TUESDAY)) {
+      await bookAppointment({ patientId, scheduledFor: instant });
+    }
+
+    const result = await findAvailability({
+      now: NOW,
+      preference: { kind: 'day', date: TUESDAY },
+    });
+
+    expect(result.dayFullyBooked).toBe(true);
+    expect(result.outsideClinicHours).toBe(false);
+    // A fully booked Tuesday does not stop the model offering a different day.
+    expect(result.alternatives.length).toBeGreaterThan(0);
+  });
+
+  it('does NOT report dayFullyBooked for "closed for today" — fix round 2\'s bug', async () => {
+    // Reviewer's exact scenario (fix round 2): `now` sits right at closing
+    // time on the requested day, and nothing was ever booked. The old logic
+    // conflated "no future grid slots left today" with "booked out", so it
+    // reported dayFullyBooked: true — the agent would say "Monday is
+    // completely booked up" for a day that had simply ended.
+    //
+    // The correct pair of flags here is BOTH false, and each says a different
+    // true thing: outsideClinicHours stays false because Monday itself is a
+    // normal working day (the flag answers "is the requested day/time ever
+    // open", not "has today already happened") — dayFullyBooked is false
+    // because there is nothing left TO book out; `remainingOnDay` (today's
+    // grid slots still ahead of `now`) is empty. Neither sentence is "fully
+    // booked"; the correct one is simply "we're closed for today".
+    const closingTime = at(17 * 60); // 17:00 Central = clinic just closed
+
+    const dayResult = await findAvailability({
+      now: closingTime,
+      preference: { kind: 'day', date: MONDAY },
+    });
+    expect(dayResult.dayFullyBooked).toBe(false);
+    expect(dayResult.outsideClinicHours).toBe(false);
+    expect(dayResult.alternatives.length).toBeGreaterThan(0);
+
+    // Same bug, the `kind: 'time'` branch — the reviewer's scenario applies to
+    // both, not just `kind: 'day'`.
+    const timeResult = await findAvailability({
+      now: closingTime,
+      preference: { kind: 'time', date: MONDAY, minutesOfDay: 13 * 60 },
+    });
+    expect(timeResult.dayFullyBooked).toBe(false);
+    expect(timeResult.outsideClinicHours).toBe(false);
+    expect(timeResult.matched).toBeNull();
   });
 
   it('never offers a slot in the past', async () => {

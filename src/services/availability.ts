@@ -160,7 +160,21 @@ export async function findAvailability(opts: {
 
   const date = preference.date ?? utcToClinicDate(open[0] ?? now, CLINIC_TIMEZONE);
   const onDay = open.filter((instant) => sameClinicDay(instant, date));
-  const isWorkingDay = clinicDayGrid(date).length > 0;
+  const grid = clinicDayGrid(date);
+  const isWorkingDay = grid.length > 0;
+
+  // "Fully booked" and "closed / already over" are different sentences and
+  // must not collapse into the same boolean. `onDay` only ever contains
+  // FUTURE open instants (openInstants already filtered on `now`), so once
+  // today's last slot has passed, `onDay` is empty whether or not anything
+  // was ever booked — that emptiness alone cannot mean "booked out". A day is
+  // only genuinely full if it still has grid slots ahead of `now` and every
+  // one of them is taken. Reviewed and confirmed in fix round 2: `now` at
+  // 17:00 Central on a Monday, asking about that Monday, used to report
+  // dayFullyBooked: true ("Monday is completely booked up") when the clinic
+  // had simply closed for the day.
+  const remainingOnDay = grid.filter((instant) => instant.getTime() > now.getTime());
+  const dayFullyBooked = remainingOnDay.length > 0 && onDay.length === 0;
 
   // A requested time outside opening hours, or a weekend.
   const requestedMinutes = preference.minutesOfDay;
@@ -173,7 +187,7 @@ export async function findAvailability(opts: {
     return {
       matched: null,
       alternatives: (onDay.length > 0 ? onDay : open).slice(0, MAX_OFFERED_SLOTS).map(toSlot),
-      dayFullyBooked: isWorkingDay && onDay.length === 0,
+      dayFullyBooked,
       outsideClinicHours: !isWorkingDay,
     };
   }
@@ -189,7 +203,7 @@ export async function findAvailability(opts: {
       alternatives: (inPart.length > 0 ? inPart : onDay.length > 0 ? onDay : open)
         .slice(0, MAX_OFFERED_SLOTS)
         .map(toSlot),
-      dayFullyBooked: isWorkingDay && onDay.length === 0,
+      dayFullyBooked,
       outsideClinicHours: !isWorkingDay,
     };
   }
@@ -213,7 +227,7 @@ export async function findAvailability(opts: {
       .filter((instant) => instant.getTime() !== exact?.getTime())
       .slice(0, MAX_OFFERED_SLOTS)
       .map(toSlot),
-    dayFullyBooked: isWorkingDay && onDay.length === 0,
+    dayFullyBooked,
     outsideClinicHours,
   };
 }
