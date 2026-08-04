@@ -82,10 +82,15 @@ describe('getAvailableSlots', () => {
   });
 
   it('spells the time out for the voice model to read aloud', () => {
+    // `spokenTime` reads CLINIC-LOCAL time (formatSpokenTime, appointment.ts),
+    // not the UTC hour these ids are stored at. 09:00 UTC in August is Central
+    // Daylight Time (UTC-5), so the spoken hour is 4 AM, not 9 AM — the
+    // mismatch between "stored at 09:00 UTC" and "read aloud at 9 AM" is
+    // exactly the bug the clinic-availability feature fixed.
     expect(getAvailableSlots(FRIDAY_MIDDAY).map((slot) => slot.spokenTime)).toEqual([
-      'Monday, August 10 at 9 AM',
-      'Tuesday, August 11 at 9 AM',
-      'Wednesday, August 12 at 9 AM',
+      'Monday, August 10 at 4 AM',
+      'Tuesday, August 11 at 4 AM',
+      'Wednesday, August 12 at 4 AM',
     ]);
   });
 });

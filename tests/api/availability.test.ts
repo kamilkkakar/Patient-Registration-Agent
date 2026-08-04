@@ -7,7 +7,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { findAvailability, parseSlotId, resolveOpenSlot } from '../../src/services/availability.js';
-import { bookAppointment } from '../../src/services/appointment.js';
+import { bookAppointment, formatSpokenTime } from '../../src/services/appointment.js';
 import { zonedWallTimeToUtc, utcToClinicMinutes } from '../../src/lib/clinic-time.js';
 import { CLINIC_TIMEZONE } from '../../src/config/clinic.js';
 import { api, purgeTestPatients, startTestApp, testLastName, validPayload } from '../helpers.js';
@@ -88,6 +88,28 @@ describe('findAvailability', () => {
   it('caps what it returns so the tool result stays speakable', async () => {
     const result = await findAvailability({ now: NOW, preference: { kind: 'any' } });
     expect(result.alternatives.length).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('formatSpokenTime — clinic-local, not UTC', () => {
+  // WHY this exists: `findAvailability` builds slots by converting
+  // clinic-local wall time to UTC (`zonedWallTimeToUtc`). `formatSpokenTime`
+  // used to read UTC components straight off that instant — correct for the
+  // OLD fixed-UTC mock catalogue, wrong the moment a clinic-local instant is
+  // fed in: clinic-local 1 PM Central would be announced as "7 PM". A single
+  // hard-coded offset cannot be right in both seasons, so this pins one winter
+  // case (CST, UTC-6) and one summer case (CDT, UTC-5).
+  it('speaks clinic-local time in winter (CST, UTC-6)', () => {
+    const winterSlot = zonedWallTimeToUtc(MONDAY, 13 * 60, CLINIC_TIMEZONE);
+    expect(winterSlot.toISOString()).toBe('2026-12-07T19:00:00.000Z');
+    expect(formatSpokenTime(winterSlot)).toBe('Monday, December 7 at 1 PM');
+  });
+
+  it('speaks clinic-local time in summer (CDT, UTC-5)', () => {
+    const JULY_MONDAY = { year: 2026, month: 7, day: 6 };
+    const summerSlot = zonedWallTimeToUtc(JULY_MONDAY, 13 * 60, CLINIC_TIMEZONE);
+    expect(summerSlot.toISOString()).toBe('2026-07-06T18:00:00.000Z');
+    expect(formatSpokenTime(summerSlot)).toBe('Monday, July 6 at 1 PM');
   });
 });
 

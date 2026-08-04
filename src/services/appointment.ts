@@ -12,6 +12,8 @@
 // instead of chasing the clock.
 
 import type { Appointment } from '@prisma/client';
+import { CLINIC_TIMEZONE } from '../config/clinic.js';
+import { clinicWeekday, utcToClinicDate, utcToClinicMinutes } from '../lib/clinic-time.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { getPatientById } from './patient.js';
@@ -83,16 +85,27 @@ function formatSlotId(scheduledFor: Date): string {
 /**
  * Exported because `cancel_appointment` has to say WHICH time it released, and
  * it only has the stored row — not a `Slot` from the offered catalogue.
+ *
+ * Reads CLINIC-LOCAL components, not UTC. Every caller of this function deals
+ * in clinic-local wall time: `src/services/availability.ts` builds its slots
+ * by converting clinic-local hours to UTC instants (`zonedWallTimeToUtc`), and
+ * the mock catalogue below stores its fixed hour in UTC purely as a storage
+ * convenience. Reading `getUTCHours()` here would announce a 1 PM Central slot
+ * as "7 PM" on a live call — the offset is silent in the data and only shows up
+ * in what gets spoken. Do not "simplify" this back to the UTC getters.
  */
 export function formatSpokenTime(scheduledFor: Date): string {
-  // `?? ''` satisfies noUncheckedIndexedAccess; getUTCDay/getUTCMonth are
+  const clinicDate = utcToClinicDate(scheduledFor, CLINIC_TIMEZONE);
+  const clinicMinutes = utcToClinicMinutes(scheduledFor, CLINIC_TIMEZONE);
+
+  // `?? ''` satisfies noUncheckedIndexedAccess; clinicWeekday and month are
   // always in range, so the fallback is unreachable.
-  const weekday = WEEKDAYS[scheduledFor.getUTCDay()] ?? '';
-  const month = MONTHS[scheduledFor.getUTCMonth()] ?? '';
-  const hour24 = scheduledFor.getUTCHours();
+  const weekday = WEEKDAYS[clinicWeekday(clinicDate)] ?? '';
+  const month = MONTHS[clinicDate.month - 1] ?? '';
+  const hour24 = Math.floor(clinicMinutes / 60);
   const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
   const meridiem = hour24 < 12 ? 'AM' : 'PM';
-  return `${weekday}, ${month} ${String(scheduledFor.getUTCDate())} at ${String(hour12)} ${meridiem}`;
+  return `${weekday}, ${month} ${String(clinicDate.day)} at ${String(hour12)} ${meridiem}`;
 }
 
 /**
