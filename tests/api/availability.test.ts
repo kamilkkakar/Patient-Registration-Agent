@@ -103,6 +103,19 @@ describe('findAvailability', () => {
     expect(result.outsideClinicHours).toBe(false);
     // A fully booked Tuesday does not stop the model offering a different day.
     expect(result.alternatives.length).toBeGreaterThan(0);
+
+    // Discriminating check: SAME date, SAME 16 bookings above — only `now`
+    // moves past Tuesday's close. The old logic
+    // (`isWorkingDay && onDay.length === 0`) never looked at whether a grid
+    // slot was still ahead of `now`, so it would read `true` here too; only
+    // the "remaining grid" gate this fix added tells "booked out" apart from
+    // "nothing left to book because the day is over".
+    const afterTuesdayClose = zonedWallTimeToUtc(TUESDAY, 17 * 60, CLINIC_TIMEZONE);
+    const pastClose = await findAvailability({
+      now: afterTuesdayClose,
+      preference: { kind: 'day', date: TUESDAY },
+    });
+    expect(pastClose.dayFullyBooked).toBe(false);
   });
 
   it('does NOT report dayFullyBooked for "closed for today" — fix round 2\'s bug', async () => {
@@ -127,6 +140,11 @@ describe('findAvailability', () => {
     });
     expect(dayResult.dayFullyBooked).toBe(false);
     expect(dayResult.outsideClinicHours).toBe(false);
+    // Alternatives come from Wednesday Dec 9 onward regardless of whether the
+    // preceding test's Tuesday-fully-booked fixture has run — Monday itself
+    // contributes nothing (day is over) and Tuesday may or may not be full,
+    // but the 14-day search window always has an open day further out. Not an
+    // ordering dependency on the test above, only a shared date range.
     expect(dayResult.alternatives.length).toBeGreaterThan(0);
 
     // Same bug, the `kind: 'time'` branch — the reviewer's scenario applies to
