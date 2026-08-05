@@ -1,46 +1,25 @@
-// Business logic for the Appointment resource (bonus: mock post-registration
-// scheduling).
+// Business logic for the Appointment resource (bonus: post-registration
+// scheduling), plus the WEEKDAYS/MONTHS tables and `formatSpokenTime` that
+// `src/services/availability.ts` reuses to speak a slot back to the caller.
 //
 // Like `services/patient.ts`, this is a layer that MAY touch Prisma; the Vapi
 // tool handlers and the routes must not.
 //
-// The slot catalogue is MOCK availability and is COMPUTED, not stored. The
-// challenge asks for scheduling against mock data, so there is no clinic
-// calendar to query — and Rule 5 says a deterministic transform belongs in
-// code, never in the model. `getAvailableSlots` is therefore pure: no I/O, no
-// randomness, no `Date.now()`. `now` is a parameter so a test pins the answer
-// instead of chasing the clock.
+// The slot catalogue itself — which instants are open — now lives in
+// `availability.ts`, derived from clinic hours minus live bookings (see its
+// header comment). This file no longer offers or resolves slots; it only
+// persists what availability already validated.
 
 import type { Appointment } from '@prisma/client';
 import { CLINIC_TIMEZONE } from '../config/clinic.js';
-import {
-  addClinicDays,
-  clinicWeekday,
-  utcToClinicDate,
-  utcToClinicMinutes,
-  zonedWallTimeToUtc,
-} from '../lib/clinic-time.js';
+import { clinicWeekday, utcToClinicDate, utcToClinicMinutes } from '../lib/clinic-time.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { getPatientById } from './patient.js';
 
 // ---------------------------------------------------------------------------
-// Mock availability
+// Spoken time formatting — shared with availability.ts
 // ---------------------------------------------------------------------------
-
-/** How many slots are offered on one call. Three is what a caller can hold in their head. */
-const SLOT_COUNT = 3;
-
-/**
- * Every mock slot is at this CLINIC-LOCAL hour.
- *
- * Was UTC-fixed under the old premise "there is no per-clinic timezone to
- * model" — that premise broke the moment `formatSpokenTime` started reading
- * clinic-local time (see its doc comment): a slot built at a fixed UTC hour
- * then spoke as 4 AM in summer. Built with `zonedWallTimeToUtc` below so the
- * stored instant and the spoken hour agree in every season.
- */
-const SLOT_HOUR_LOCAL_MINUTES = 9 * 60;
 
 /**
  * Hand-rolled rather than `Intl.DateTimeFormat`, for the same reason
@@ -73,40 +52,16 @@ const MONTHS = [
   'December',
 ] as const;
 
-/** One offered slot. `slotId` is what the model hands back to `book_appointment`. */
-export interface Slot {
-  /**
-   * Stable and self-describing: `slot-YYYY-MM-DDTHH:MMZ`. The id ENCODES the
-   * instant, so booking needs no server-side session state — the same `now`
-   * regenerates the same id.
-   */
-  slotId: string;
-  scheduledFor: Date;
-  /** Voice form, e.g. "Monday, August 3 at 9 AM". */
-  spokenTime: string;
-}
-
-/** UTC components only — a local-time read would shift the slot by a day. */
-function formatSlotId(scheduledFor: Date): string {
-  const year = String(scheduledFor.getUTCFullYear()).padStart(4, '0');
-  const month = String(scheduledFor.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(scheduledFor.getUTCDate()).padStart(2, '0');
-  const hour = String(scheduledFor.getUTCHours()).padStart(2, '0');
-  const minute = String(scheduledFor.getUTCMinutes()).padStart(2, '0');
-  return `slot-${year}-${month}-${day}T${hour}:${minute}Z`;
-}
-
 /**
  * Exported because `cancel_appointment` has to say WHICH time it released, and
- * it only has the stored row — not a `Slot` from the offered catalogue.
+ * it only has the stored row — not a `Slot` from `availability.ts`.
  *
  * Reads CLINIC-LOCAL components, not UTC. Every caller of this function deals
  * in clinic-local wall time: `src/services/availability.ts` builds its slots
- * by converting clinic-local hours to UTC instants (`zonedWallTimeToUtc`), and
- * the mock catalogue below stores its fixed hour in UTC purely as a storage
- * convenience. Reading `getUTCHours()` here would announce a 1 PM Central slot
- * as "7 PM" on a live call — the offset is silent in the data and only shows up
- * in what gets spoken. Do not "simplify" this back to the UTC getters.
+ * by converting clinic-local hours to UTC instants (`zonedWallTimeToUtc`).
+ * Reading `getUTCHours()` here would announce a 1 PM Central slot as "7 PM" on
+ * a live call — the offset is silent in the data and only shows up in what
+ * gets spoken. Do not "simplify" this back to the UTC getters.
  */
 export function formatSpokenTime(scheduledFor: Date): string {
   const clinicDate = utcToClinicDate(scheduledFor, CLINIC_TIMEZONE);
@@ -120,55 +75,6 @@ export function formatSpokenTime(scheduledFor: Date): string {
   const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
   const meridiem = hour24 < 12 ? 'AM' : 'PM';
   return `${weekday}, ${month} ${String(clinicDate.day)} at ${String(hour12)} ${meridiem}`;
-}
-
-/**
- * The next three weekday slots strictly after `now`.
- *
- * The walk starts at tomorrow, never today: a caller phoning at 08:00 must not
- * be offered a 09:00 slot the same morning, and "strictly after now" is the
- * only rule that holds however late in the day the call lands.
- *
- * Saturday and Sunday are skipped — a registration desk that books a Sunday is
- * obviously wrong, and this is the one domain rule the mock can get right.
- */
-export function getAvailableSlots(now: Date): Slot[] {
-  const slots: Slot[] = [];
-
-  let date = utcToClinicDate(now, CLINIC_TIMEZONE);
-
-  while (slots.length < SLOT_COUNT) {
-    date = addClinicDays(date, 1);
-
-    const weekday = clinicWeekday(date);
-    if (weekday === 0 || weekday === 6) continue;
-
-    const scheduledFor = zonedWallTimeToUtc(date, SLOT_HOUR_LOCAL_MINUTES, CLINIC_TIMEZONE);
-    slots.push({
-      slotId: formatSlotId(scheduledFor),
-      scheduledFor,
-      spokenTime: formatSpokenTime(scheduledFor),
-    });
-  }
-
-  return slots;
-}
-
-/**
- * Resolve a slot id the model sent back, by MEMBERSHIP of the currently offered
- * set — not by parsing the id into a date.
- *
- * Membership is the tighter check: it rejects a well-formed id for a Sunday, for
- * last month, or for 3 AM, all of which a parse would happily accept. It also
- * means no code path anywhere hands a string to `new Date()`.
- *
- * Known accepted edge: the offered set rolls over at UTC midnight, so a call
- * that spans midnight can be offered a slot and then have it rejected a moment
- * later. The caller is re-offered the current three and books again — the
- * failure is a field failure, which the model already knows how to re-prompt.
- */
-export function findSlotById(slotId: string, now: Date): Slot | null {
-  return getAvailableSlots(now).find((slot) => slot.slotId === slotId) ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +98,7 @@ export interface BookAppointmentInput {
 }
 
 /**
- * Book one mock slot. `status` defaults to SCHEDULED in the schema.
+ * Book one open slot. `status` defaults to SCHEDULED in the schema.
  *
  * `getPatientById` is what enforces the soft-delete rule here: it throws
  * NotFoundError for both "no such patient" and "tombstoned patient", so a
@@ -338,7 +244,7 @@ export async function cancelAppointment(input: ChangeAppointmentInput): Promise<
  * have not happened yet, and orders ASCENDING because the soonest is the one a
  * caller means when they say "my appointment".
  *
- * `now` is injected for the same reason `getAvailableSlots` takes it: a test pins
+ * `now` is injected for the same reason `findAvailability` takes it: a test pins
  * the answer instead of chasing the clock.
  */
 export async function listUpcomingAppointmentsForPatient(

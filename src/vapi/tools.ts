@@ -28,6 +28,7 @@ import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { formatDob } from '../lib/serialize.js';
 import { normalizePhone } from '../normalize/index.js';
 import * as appointmentService from '../services/appointment.js';
+import * as availabilityService from '../services/availability.js';
 import * as patientService from '../services/patient.js';
 import {
   bookAppointmentSchema,
@@ -330,12 +331,23 @@ async function getAppointmentSlots(args: ToolCallArgs): Promise<ToolOutcome> {
     return infraFailure('The appointment times could not be read because the record store is unavailable.');
   }
 
-  // Pure, so nothing below can throw. § G14: the result carries three slots and
-  // their ids and nothing else — no patient name, no confirmation preamble.
-  const offered = appointmentService
-    .getAvailableSlots(new Date())
+  // § G14: the result carries up to three slots and their ids and nothing
+  // else — no patient name, no confirmation preamble. `findAvailability`
+  // reads real bookings, so a throw here reaches the belt-and-braces catch in
+  // routes.ts rather than a bespoke one — there is no field-specific recovery
+  // to offer for "the availability query itself failed".
+  const availability = await availabilityService.findAvailability({
+    now: new Date(),
+    preference: { kind: 'any' },
+  });
+
+  const offered = availability.alternatives
     .map((slot) => `${slot.spokenTime} — slot_id ${slot.slotId}`)
     .join('; ');
+
+  if (offered.length === 0) {
+    return { result: oneLine('No appointment times are open in the next two weeks.') };
+  }
 
   return { result: oneLine(`Available: ${offered}.`) };
 }
@@ -348,9 +360,9 @@ async function bookAppointment(args: ToolCallArgs): Promise<ToolOutcome> {
   }
 
   // ONE clock read, resolved once and passed down. Re-reading the clock later in
-  // this handler could straddle the UTC-midnight rollover of the offered set and
-  // book a slot that was never validated.
-  const slot = appointmentService.findSlotById(parsed.data.slot_id, new Date());
+  // this handler could straddle a grid boundary and book a slot that was never
+  // validated.
+  const slot = await availabilityService.resolveOpenSlot(parsed.data.slot_id, new Date());
 
   if (slot === null) {
     return fieldFailure(SLOT_ID_UNKNOWN);
@@ -363,6 +375,13 @@ async function bookAppointment(args: ToolCallArgs): Promise<ToolOutcome> {
     });
     return { result: `Booked. Appointment on ${slot.spokenTime}.` };
   } catch (error) {
+    // Losing the race for a slot is ordinary conversation, not an outage. A
+    // FIELD failure lets the model offer another time in its own words.
+    if (typeof error === 'object' && error !== null && (error as { code?: string }).code === 'P2002') {
+      return fieldFailure(
+        'That time was taken while the caller was deciding. Call get_appointment_slots again and offer what it returns.',
+      );
+    }
     // Unknown or soft-deleted patient — the caller's problem to resolve
     // conversationally, not an outage. Same split as `update_patient`.
     if (error instanceof NotFoundError) {
@@ -388,10 +407,10 @@ async function rescheduleAppointment(args: ToolCallArgs): Promise<ToolOutcome> {
   }
 
   // ONE clock read for the whole handler, same as book_appointment: re-reading
-  // it could straddle the UTC-midnight rollover of the offered set and move the
-  // booking to a slot that was never validated.
+  // it could straddle a grid boundary and move the booking to a slot that was
+  // never validated.
   const now = new Date();
-  const slot = appointmentService.findSlotById(parsed.data.slot_id, now);
+  const slot = await availabilityService.resolveOpenSlot(parsed.data.slot_id, now);
 
   if (slot === null) {
     return fieldFailure(SLOT_ID_UNKNOWN);
@@ -411,6 +430,13 @@ async function rescheduleAppointment(args: ToolCallArgs): Promise<ToolOutcome> {
     // "original" and destroy the caller's only appointment. Same row, moved.
     return { result: oneLine(`Rescheduled. This appointment is now on ${slot.spokenTime}.`) };
   } catch (error) {
+    // Losing the race for a slot is ordinary conversation, not an outage. A
+    // FIELD failure lets the model offer another time in its own words.
+    if (typeof error === 'object' && error !== null && (error as { code?: string }).code === 'P2002') {
+      return fieldFailure(
+        'That time was taken while the caller was deciding. Call get_appointment_slots again and offer what it returns.',
+      );
+    }
     // Unknown patient, unknown appointment, someone else's appointment: all the
     // caller's problem to resolve conversationally, none an outage.
     if (error instanceof NotFoundError) return fieldFailure(APPOINTMENT_UNKNOWN);

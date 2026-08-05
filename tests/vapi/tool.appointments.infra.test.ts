@@ -18,9 +18,6 @@ vi.mock('../../src/services/appointment.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/services/appointment.js')>();
   return {
     ...actual,
-    // `getAvailableSlots` and `findSlotById` stay REAL — they are pure, they
-    // cannot fail, and the handler needs a genuinely bookable slot id to reach
-    // the persistence call this suite is about.
     bookAppointment: vi.fn().mockRejectedValue(new Error('db down — book')),
   };
 });
@@ -35,6 +32,7 @@ vi.mock('../../src/services/patient.js', async (importOriginal) => {
 
 const appointmentService = await import('../../src/services/appointment.js');
 const patientService = await import('../../src/services/patient.js');
+const availabilityService = await import('../../src/services/availability.js');
 const { api, startTestApp } = await import('../helpers.js');
 
 // Must match INFRA_SPEECH in src/vapi/tools.ts — duplicated here on purpose
@@ -88,9 +86,13 @@ async function postTool(body: unknown): Promise<{ status: number; results: ToolR
   return { status: res.status, results: (res.body as { results: ToolResult[] }).results };
 }
 
-/** A slot that is genuinely on offer right now — the real, unmocked catalogue. */
-function bookableSlotId(): string {
-  return appointmentService.getAvailableSlots(new Date())[0]?.slotId ?? '';
+/** A slot that is genuinely open right now — the real, unmocked availability query. */
+async function bookableSlotId(): Promise<string> {
+  const availability = await availabilityService.findAvailability({
+    now: new Date(),
+    preference: { kind: 'any' },
+  });
+  return availability.alternatives[0]?.slotId ?? '';
 }
 
 describe('POST /vapi/tool — appointment infrastructure failures', () => {
@@ -108,7 +110,7 @@ describe('POST /vapi/tool — appointment infrastructure failures', () => {
     const { status, results } = await postTool(
       specShape('tc-appt-infra-book', 'book_appointment', {
         patient_id: PATIENT_ID,
-        slot_id: bookableSlotId(),
+        slot_id: await bookableSlotId(),
       }),
     );
 
@@ -125,7 +127,7 @@ describe('POST /vapi/tool — appointment infrastructure failures', () => {
     const { status, results } = await postTool(
       specShape('tc-appt-infra-notfound', 'book_appointment', {
         patient_id: PATIENT_ID,
-        slot_id: bookableSlotId(),
+        slot_id: await bookableSlotId(),
       }),
     );
 

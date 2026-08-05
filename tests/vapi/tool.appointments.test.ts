@@ -88,9 +88,9 @@ async function createPatient(suffix: string): Promise<string> {
 const SLOT_ID = /slot-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z/g;
 
 /**
- * Take the offered ids from the tool's OWN response rather than calling
- * `getAvailableSlots` again: the offered set rolls over at UTC midnight, and a
- * second, independent read of the clock could disagree with the first.
+ * Take the offered ids from the tool's OWN response rather than querying
+ * availability again: the offered set is derived from live bookings and `now`,
+ * and a second, independent read could disagree with the first.
  */
 async function offerSlots(id: string, patientId: string): Promise<{ result: string; slotIds: string[] }> {
   const { results } = await postTool(specShape(id, 'get_appointment_slots', { patient_id: patientId }));
@@ -439,6 +439,69 @@ async function lookup(id: string, phone: string): Promise<ToolResult> {
   const { results } = await postTool(specShape(id, 'lookup_patient_by_phone', { phone_number: phone }));
   return results[0]!;
 }
+
+describe('slots come from real availability', () => {
+  it('stops offering a time once it is booked', async () => {
+    // WHY: the old fixed mock catalogue never read the database, so the same
+    // three times were offered no matter what was already taken.
+    const patientId = await createPatient('Realavail');
+    const { slotIds } = await offerSlots('ra1', patientId);
+    const first = slotIds[0]!;
+
+    await postTool(specShape('ra1-book', 'book_appointment', { patient_id: patientId, slot_id: first }));
+
+    const again = await offerSlots('ra1-again', patientId);
+    expect(again.slotIds).not.toContain(first);
+  });
+
+  it('refuses a booked slot as a FIELD failure, not an outage', async () => {
+    // WHY: losing a race is ordinary conversation, not a broken system. An
+    // inline request-failed would have Nora apologise for the wrong thing.
+    const a = await createPatient('Raceone');
+    const b = await createPatient('Racetwo');
+    const { slotIds } = await offerSlots('race-offer', a);
+    const contested = slotIds[0]!;
+
+    await postTool(specShape('race-a', 'book_appointment', { patient_id: a, slot_id: contested }));
+    const { results } = await postTool(
+      specShape('race-b', 'book_appointment', { patient_id: b, slot_id: contested }),
+    );
+
+    expect(results[0]?.error).toBeDefined();
+    expect(results[0]?.message).toBeUndefined();
+  });
+
+  it('a genuine concurrent race is decided by the database, not the read-check', async () => {
+    // WHY: the sequential test above (book, THEN try to book again) is refused
+    // by `resolveOpenSlot`'s membership check before the second call ever
+    // reaches `prisma.appointment.create` — it never proves the P2002 branch
+    // added to `bookAppointment`'s catch actually fires. Firing BOTH requests
+    // together (mirrors tests/api/appointments.concurrency.test.ts, which
+    // proves the same race at the service layer) lets both pass the read-check
+    // and reach the insert together, so the loser must be caught by P2002
+    // specifically, not by the earlier `slot === null` branch.
+    const a = await createPatient('Raceconflicta');
+    const b = await createPatient('Raceconflictb');
+    const { slotIds } = await offerSlots('race-p2002-offer', a);
+    const contested = slotIds[0]!;
+
+    const [resA, resB] = await Promise.all([
+      postTool(specShape('race-p2002-a', 'book_appointment', { patient_id: a, slot_id: contested })),
+      postTool(specShape('race-p2002-b', 'book_appointment', { patient_id: b, slot_id: contested })),
+    ]);
+
+    const outcomes = [resA.results[0], resB.results[0]];
+    const won = outcomes.filter((o) => o?.error === undefined);
+    const lost = outcomes.filter((o) => o?.error !== undefined);
+
+    expect(won).toHaveLength(1);
+    expect(lost).toHaveLength(1);
+    // "taken" pins the P2002 wording specifically, distinguishing it from
+    // SLOT_ID_UNKNOWN's "not one of the times currently on offer".
+    expect(lost[0]?.error).toContain('taken');
+    expect(lost[0]?.message).toBeUndefined();
+  });
+});
 
 describe('lookup_patient_by_phone with appointments', () => {
   it('carries the appointment_id so a change needs no extra tool call', async () => {
