@@ -1049,24 +1049,28 @@ placed strictly inside step 3 of the hard gate, on the far side of a successful 
 cannot physically happen earlier: both tools require the `patient_id` that only `create_patient`
 returns.
 
-**Why the model must copy `slot_id` verbatim.** The server resolves a slot by *membership* of the
-set it just offered, not by parsing the id into a date. A parse would accept a well-formed id for a
-Sunday, for last month, or for three in the morning; membership accepts none of those. The
-consequence for the prompt is that an invented, reformatted or remembered-from-earlier slot_id is
-always wrong, so the instruction is phrased as "character for character" rather than as a
-suggestion.
+**Why the model must copy `slot_id` verbatim.** The server does parse the id into a date, but a
+parse alone would accept a well-formed id for a Sunday, for last month, or for three in the
+morning. It also checks the parsed instant against the clinic-hours grid, the current clock, and
+what is already booked — a well-formed id only survives all three. The consequence for the prompt
+is the same either way: an invented, reformatted or remembered-from-earlier slot_id is always wrong,
+so the instruction is phrased as "character for character" rather than as a suggestion.
 
 **Why the times come from a tool at all, rather than from this prompt.** Rule 5: a deterministic
 transform belongs in code. Had the prompt said "offer the next three weekdays at nine", every call
 would depend on the model doing date arithmetic, weekend-skipping and formatting correctly, and no
-test could pin the answer. `getAvailableSlots` is pure with an injected clock, so the same input
-gives the same three slots in a unit test and on a live call.
+test could pin the answer. `findAvailability` takes an injected clock rather than reading
+`Date.now()`, and the clinic-day grid it walks is pure, so the same clock plus the same booked rows
+in the database gives the same offered times in a unit test and on a live call.
 
-**Why an expired slot is a field failure, not an outage.** The offered set rolls over at UTC
-midnight, so a call spanning it can be offered a time and then have it refused a moment later. That
-returns a bare `error` with no inline `request-failed` message, which by § 2.7 means the model
-writes its own recovery line — here, re-offering the new times. Giving it the canned infrastructure
-apology would tell the caller the system is broken when it simply moved on a day.
+**Why an expired slot is a field failure, not an outage.** A slot offered a moment ago can fail at
+booking time for two reasons that have nothing to do with the offer being stale: the clock has since
+passed it, or another caller took it first. `resolveOpenSlot` checks the id structurally against the
+grid, the clock and the database at the moment of booking — not against the set that was offered —
+so either case surfaces the same way. That returns a bare `error` with no inline `request-failed`
+message, which by § 2.7 means the model writes its own recovery line — here, re-offering the new
+times. Giving it the canned infrastructure apology would tell the caller the system is broken when a
+slot simply got taken, or time moved on.
 
 **Why exactly one offer.** § 2.9 established that the ending must not trap the caller in a loop they
 escape twice. Adding a second question at the end is the obvious way to reintroduce that bug, so the
@@ -1120,9 +1124,11 @@ hears as a pause before Nora says anything useful. The lookup only reads appoint
 unambiguous single match: on a shared household number there is no way to know whose schedule to
 read out, and guessing would speak one person's appointments to another.
 
-**Not built:** any real clinic calendar. The slots are mock availability with no capacity model —
-two callers can be given the same time, because there is no booking system behind this to conflict
-with. Rescheduling moves the row in place, so the previous time is not retained.
+**Availability is real.** Slots are the clinic-hours grid (9–5 Central, half-hourly, weekdays) minus
+what is already booked, searched two weeks ahead. A partial unique index in Postgres makes double
+booking impossible rather than unlikely. Still not built: multiple providers or rooms — the
+uniqueness rule is one patient per instant CLINIC-WIDE, which is right for one provider and wrong
+for two.
 
 ## 2.13 Still deliberately left out
 
