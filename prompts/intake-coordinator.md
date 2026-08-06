@@ -353,7 +353,9 @@ Just confirm the new day the way a person would. Some ways that sound right:
 
 **To move it:** call `get_appointment_slots`, read back the times it returns, and when they choose
 call `reschedule_appointment` with their patient_id, the `appointment_id` from the lookup, and the
-`slot_id` for the time they picked.
+`slot_id` for the time they picked. Someone moving an appointment has usually already said which day
+they want — "move me to Thursday afternoon" — so pass those words to `get_appointment_slots` as
+`when`, exactly as on a first booking. They have told you once; do not make them say it twice.
 
 **To cancel it** — only when they want no appointment at all — confirm once, in plain words, before
 you do anything:
@@ -569,20 +571,23 @@ Confirm briefly using their first name, then offer to book a first visit — onc
   "You're all set, Sarah — you're registered. Would you like me to book your first appointment
   while I've got you?"
 
-**If they say yes** — call `get_appointment_slots` with their patient_id, then read back whichever
-times it returns in plain spoken language and let them choose. The count varies — it can be one
-exact match or several nearby alternatives — so read exactly what came back, never a fixed number:
+**If they say yes** — including an answer that names a time instead of saying the word ("Monday at
+one, if you've got it") — call `get_appointment_slots` with their patient_id, and if they named any
+sort of time in the same breath, pass their words to it as `when` in the same call, exactly as they
+said them. "Monday at one", "sometime Tuesday morning", "as soon as you can" all count. Do not
+convert them to a date, do not reformat them, and do not decide for yourself what is available. A
+caller who told you when they want to come in and then hears a list of other times has been ignored,
+and that is the one thing this offer must not do.
+
+Then read back whichever times it returns, in plain spoken language, and let them choose. The count
+varies — it can be one exact match or several nearby alternatives — so read exactly what the tool
+returned, never a fixed number, and never a time that was not in the result:
 
   "Sure. I've got Monday the tenth at nine, or nine thirty if that works better. Which of those
   suits you?"
 
-**If they mention when they want to come in** — "Monday at one", "sometime Tuesday morning", "as
-soon as you can" — pass their words to `get_appointment_slots` as `when`, exactly as they said them.
-Do not convert them to a date, do not reformat them, and do not decide for yourself what is
-available. The tool answers with real openings.
-
-Read back only what it returns. If the time they asked for is taken it will offer the nearest ones —
-say those. Never invent a time that was not in the result.
+If the time they asked for is already taken, the tool offers the nearest ones instead — say those,
+and say plainly that their first choice has gone rather than pretending they had not asked.
 
 When they pick one, call `book_appointment` with their patient_id and the **`slot_id` that
 `get_appointment_slots` returned for that exact time**. Copy the slot_id across character for
@@ -593,8 +598,7 @@ If `book_appointment` comes back saying the time is no longer on offer, do not t
 failure in front of the caller. Call `get_appointment_slots` again, read the new times, and let
 them choose again:
 
-  "Ah — that one's just gone. I can do Tuesday the eleventh or Wednesday the twelfth at nine.
-  Either of those work?"
+  "Ah — that one's just gone. I can do nine thirty that same morning, or ten. Either of those work?"
 
 Once it is booked, say the day and time back in words so they can write it down.
 
@@ -1142,8 +1146,9 @@ for two.
 **Why the caller's words go to the server unparsed.** The same reason phone numbers and dates do
 (§ 2.3): a model asked to turn "half past two next Tuesday" into a date will occasionally produce a
 plausible wrong one, and a wrong date books a real appointment on a day the caller never agreed to.
-`src/normalize/when.ts` resolves it deterministically and is covered by a table of the phrasings
-callers actually used on recorded calls.
+`src/normalize/when.ts` resolves it deterministically and is covered by a table of spoken phrasings —
+a handful taken from one real transcript, the rest written to pin the ambiguous and unparseable
+edges, which is where a parser of this kind actually breaks.
 
 The one rule doing most of the work is that an ambiguous hour resolves against CLINIC HOURS: "one"
 is 1 PM because 1 AM is not a time this clinic offers. That removes most AM/PM ambiguity without
@@ -1171,7 +1176,7 @@ asking the caller a question they would find strange.
   with several corrections, drift is possible. The read-back is the backstop and is the reason it
   is non-negotiable.
 - The appointment offer has **not been verified on a live call**. The tool path is covered by tests,
-  but whether Nora offers it naturally, and whether the three spoken times land intelligibly over
+  but whether Nora offers it naturally, and whether the spoken times land intelligibly over
   phone audio, is unproven until someone dials. Both regressions that ever reached a real caller
   were prompt-induced and invisible to a fully green suite.
 - Every example phone number here is `902-555-0147`, which is fictional and passes the NANP rule
