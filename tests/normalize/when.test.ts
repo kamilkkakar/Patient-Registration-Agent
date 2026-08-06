@@ -11,7 +11,7 @@
 // `null` is reserved for text that could not be parsed as a time at all.
 
 import { describe, expect, it } from 'vitest';
-import { parseSpokenTime } from '../../src/normalize/when.js';
+import { parseSpokenTime, parseWhen } from '../../src/normalize/when.js';
 
 const cases: [string, number | null][] = [
   ['1 PM', 13 * 60],
@@ -57,4 +57,61 @@ describe('parseSpokenTime', () => {
       expect(parseSpokenTime(input)).toBe(expected);
     });
   }
+});
+
+// Monday 3 August 2026.
+const TODAY = { year: 2026, month: 8, day: 3 };
+
+describe('parseWhen', () => {
+  it('reads a weekday as the soonest upcoming one', () => {
+    expect(parseWhen('wednesday', TODAY)).toEqual({
+      kind: 'day', date: { year: 2026, month: 8, day: 5 },
+    });
+  });
+
+  it('treats "next Tuesday" as the soonest Tuesday', () => {
+    // WHY documented rather than clever: "next Tuesday" means different things
+    // to different people, and guessing "the week after" is wrong about as
+    // often as it is right.
+    expect(parseWhen('next tuesday', TODAY)).toEqual({
+      kind: 'day', date: { year: 2026, month: 8, day: 4 },
+    });
+  });
+
+  it('reads today when the caller names today', () => {
+    expect(parseWhen('monday', TODAY)).toEqual({ kind: 'day', date: TODAY });
+  });
+
+  it('reads tomorrow', () => {
+    expect(parseWhen('tomorrow', TODAY)).toEqual({
+      kind: 'day', date: { year: 2026, month: 8, day: 4 },
+    });
+  });
+
+  it('combines a day and a time', () => {
+    expect(parseWhen('monday at 1 pm', TODAY)).toEqual({
+      kind: 'time', date: TODAY, minutesOfDay: 13 * 60,
+    });
+  });
+
+  it('reads a time with no day', () => {
+    expect(parseWhen('half past two', TODAY)).toEqual({
+      kind: 'time', date: null, minutesOfDay: 14 * 60 + 30,
+    });
+  });
+
+  it('reads a daypart', () => {
+    expect(parseWhen('tuesday morning', TODAY)).toEqual({
+      kind: 'daypart', date: { year: 2026, month: 8, day: 4 }, part: 'morning',
+    });
+  });
+
+  it('treats an open request as no preference', () => {
+    expect(parseWhen('anything', TODAY)).toEqual({ kind: 'any' });
+    expect(parseWhen('as soon as possible', TODAY)).toEqual({ kind: 'any' });
+  });
+
+  it('returns null when nothing is recognisable', () => {
+    expect(parseWhen('purple monkey', TODAY)).toBeNull();
+  });
 });

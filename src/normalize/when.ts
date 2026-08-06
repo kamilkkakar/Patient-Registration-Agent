@@ -5,6 +5,7 @@
 // not allowed to know — that belongs to the availability layer.
 
 import { CLOSE_MINUTES, OPEN_MINUTES } from '../config/clinic.js';
+import { addClinicDays, clinicWeekday, type ClinicDate } from '../lib/clinic-time.js';
 import { TEEN_WORDS, TENS_WORDS, UNIT_WORDS } from './words.js';
 
 const HOUR_WORDS: Record<string, number | undefined> = {
@@ -126,6 +127,73 @@ export function parseSpokenTime(text: string): number | null {
       return resolveMeridiem(hour, 0, explicit);
     }
   }
+
+  return null;
+}
+
+export type WhenQuery =
+  | { kind: 'any' }
+  | { kind: 'day'; date: ClinicDate }
+  | { kind: 'daypart'; date: ClinicDate | null; part: 'morning' | 'afternoon' }
+  | { kind: 'time'; date: ClinicDate | null; minutesOfDay: number };
+
+const WEEKDAY_WORDS: Record<string, number | undefined> = {
+  sunday: 0, sun: 0,
+  monday: 1, mon: 1,
+  tuesday: 2, tue: 2, tues: 2,
+  wednesday: 3, wed: 3, weds: 3,
+  thursday: 4, thu: 4, thur: 4, thurs: 4,
+  friday: 5, fri: 5,
+  saturday: 6, sat: 6,
+};
+
+const OPEN_REQUEST = /\banything\b|\bany time\b|\bwhenever\b|\bsoonest\b|\bas soon as possible\b|\basap\b|\bearliest\b|\bfirst available\b/;
+
+/**
+ * The soonest date on or after `today` falling on `weekday`.
+ *
+ * "Monday" said on a Monday means today. The availability layer then filters
+ * out times that have already passed, so a late-afternoon caller naturally
+ * rolls to next week without this function needing to know the clock.
+ */
+function nextWeekday(today: ClinicDate, weekday: number): ClinicDate {
+  const delta = (weekday - clinicWeekday(today) + 7) % 7;
+  return addClinicDays(today, delta);
+}
+
+/** Spoken preference -> structured query, or null if nothing is recognisable. */
+export function parseWhen(text: string, today: ClinicDate): WhenQuery | null {
+  const t = clean(text);
+  if (t.length === 0) return null;
+
+  if (OPEN_REQUEST.test(t)) return { kind: 'any' };
+
+  let date: ClinicDate | null = null;
+
+  if (/\btomorrow\b/.test(t)) {
+    date = addClinicDays(today, 1);
+  } else if (/\btoday\b/.test(t)) {
+    date = today;
+  } else {
+    for (const token of t.split(' ')) {
+      const weekday = WEEKDAY_WORDS[token];
+      if (weekday !== undefined) {
+        // "next Tuesday" is the soonest Tuesday — see the test for why.
+        date = nextWeekday(today, weekday);
+        break;
+      }
+    }
+  }
+
+  const minutesOfDay = parseSpokenTime(t);
+  if (minutesOfDay !== null) return { kind: 'time', date, minutesOfDay };
+
+  // A daypart only counts when no specific time was found — "1 in the
+  // afternoon" is a time, not a daypart.
+  if (/\bmorning\b/.test(t)) return { kind: 'daypart', date, part: 'morning' };
+  if (/\bafternoon\b|\bevening\b/.test(t)) return { kind: 'daypart', date, part: 'afternoon' };
+
+  if (date !== null) return { kind: 'day', date };
 
   return null;
 }
