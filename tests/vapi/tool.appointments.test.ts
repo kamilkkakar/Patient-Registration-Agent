@@ -503,6 +503,70 @@ describe('slots come from real availability', () => {
   });
 });
 
+describe('get_appointment_slots with a spoken preference', () => {
+  it('answers a specific day and time', async () => {
+    // The call that failed: "do you have any time slot for Monday, 1 PM?"
+    const patientId = await createPatient('Whenquery');
+    const { results } = await postTool(
+      specShape('wq1', 'get_appointment_slots', { patient_id: patientId, when: 'monday at 1 pm' }),
+    );
+
+    expect(results[0]?.error).toBeUndefined();
+    expect(results[0]?.message).toBeUndefined();
+    expect(results[0]?.result).toMatch(/slot-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z/);
+  });
+
+  it('says the clinic is closed rather than inventing a time', async () => {
+    const patientId = await createPatient('Whenclosed');
+    const { results } = await postTool(
+      specShape('wq2', 'get_appointment_slots', { patient_id: patientId, when: 'saturday' }),
+    );
+
+    expect(results[0]?.result).toMatch(/closed|weekday/i);
+    expect(results[0]?.message).toBeUndefined();
+  });
+
+  it('reports the clinic hours for a time it understood but cannot offer', async () => {
+    // WHY: "seven PM" is NOT a parse failure — parseWhen returns
+    // { kind: 'time', minutesOfDay: 1140 } and findAvailability flags
+    // outsideClinicHours. The weekend case above reaches that flag via
+    // !isWorkingDay (the 'day' branch); this reaches it via minutesOfDay
+    // falling outside OPEN_MINUTES/CLOSE_MINUTES on the 'time' branch — a
+    // different computation, and the entire reason parseWhen stopped
+    // rejecting out-of-hours times as unparseable.
+    const patientId = await createPatient('Whenevening');
+    const { results } = await postTool(
+      specShape('wq5', 'get_appointment_slots', { patient_id: patientId, when: 'seven pm' }),
+    );
+
+    expect(results[0]?.error).toBeUndefined();
+    expect(results[0]?.message).toBeUndefined();
+    expect(results[0]?.result).toMatch(/open 9 to 5/i);
+    expect(results[0]?.result).toMatch(/slot-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z/);
+  });
+
+  it('treats unparseable words as a FIELD failure so the model re-asks', async () => {
+    const patientId = await createPatient('Whenjunk');
+    const { results } = await postTool(
+      specShape('wq3', 'get_appointment_slots', { patient_id: patientId, when: 'purple monkey' }),
+    );
+
+    expect(results[0]?.error).toBeDefined();
+    expect(results[0]?.message).toBeUndefined();
+  });
+
+  it('still works with no preference at all', async () => {
+    const patientId = await createPatient('Whennone');
+    const { results } = await postTool(
+      specShape('wq4', 'get_appointment_slots', { patient_id: patientId }),
+    );
+
+    expect(results[0]?.error).toBeUndefined();
+    expect(results[0]?.message).toBeUndefined();
+    expect(results[0]?.result).toMatch(/slot-/);
+  });
+});
+
 describe('lookup_patient_by_phone with appointments', () => {
   it('carries the appointment_id so a change needs no extra tool call', async () => {
     const phone = '5125550188';

@@ -26,6 +26,8 @@ const patientIdSchema = z.string().uuid('Must be a valid patient id.');
 export const getAppointmentSlotsSchema = z
   .object({
     patient_id: patientIdSchema,
+    /** Raw caller words. The server parses; the model must not. */
+    when: z.string().trim().min(1).max(120).optional(),
   })
   .strict();
 

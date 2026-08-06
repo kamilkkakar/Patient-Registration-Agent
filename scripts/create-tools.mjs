@@ -148,6 +148,11 @@ const tools = [
         type: 'object',
         properties: {
           patient_id: { type: 'string', description: 'The patient_id returned by create_patient or lookup_patient_by_phone.' },
+          when: {
+            type: 'string',
+            description:
+              'What the caller said about when they want to come in — "Monday at one", "Tuesday morning", "as soon as possible". Pass their words through unchanged; the server interprets them. Omit if they expressed no preference.',
+          },
         },
         required: ['patient_id'],
       },

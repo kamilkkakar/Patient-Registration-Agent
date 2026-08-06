@@ -23,10 +23,13 @@
 // This file calls the service layer only. It never touches Prisma.
 
 import { z } from 'zod';
+import { CLINIC_TIMEZONE } from '../config/clinic.js';
+import { utcToClinicDate } from '../lib/clinic-time.js';
 import { zodIssuesToDetails } from '../lib/envelope.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { formatDob } from '../lib/serialize.js';
 import { normalizePhone } from '../normalize/index.js';
+import { parseWhen } from '../normalize/when.js';
 import * as appointmentService from '../services/appointment.js';
 import * as availabilityService from '../services/availability.js';
 import * as patientService from '../services/patient.js';
@@ -332,24 +335,55 @@ async function getAppointmentSlots(args: ToolCallArgs): Promise<ToolOutcome> {
   }
 
   // § G14: the result carries up to three slots and their ids and nothing
-  // else — no patient name, no confirmation preamble. `findAvailability`
-  // reads real bookings, so a throw here reaches the belt-and-braces catch in
-  // routes.ts rather than a bespoke one — there is no field-specific recovery
-  // to offer for "the availability query itself failed".
-  const availability = await availabilityService.findAvailability({
-    now: new Date(),
-    preference: { kind: 'any' },
-  });
+  // else — no patient name, no confirmation preamble.
+  const now = new Date();
+  let preference: availabilityService.AvailabilityPreference = { kind: 'any' };
 
-  const offered = availability.alternatives
-    .map((slot) => `${slot.spokenTime} — slot_id ${slot.slotId}`)
-    .join('; ');
+  if (parsed.data.when !== undefined) {
+    const today = utcToClinicDate(now, CLINIC_TIMEZONE);
+    const query = parseWhen(parsed.data.when, today);
 
-  if (offered.length === 0) {
-    return { result: oneLine('No appointment times are open in the next two weeks.') };
+    // null means "could not parse at all" — the one case that field-fails.
+    // An out-of-hours time (e.g. "seven PM") is NOT this: parseWhen returns a
+    // real WhenQuery for it, and findAvailability's outsideClinicHours branch
+    // below is what turns that into "the clinic is open 9 to 5" rather than a
+    // re-ask.
+    if (query === null) {
+      return fieldFailure(
+        'Could not tell what day or time the caller meant; ask them which day suits, then call this again.',
+      );
+    }
+    preference = query;
   }
 
-  return { result: oneLine(`Available: ${offered}.`) };
+  // `findAvailability` reads real bookings, so a throw here reaches the
+  // belt-and-braces catch in routes.ts rather than a bespoke one — there is
+  // no field-specific recovery to offer for "the availability query itself
+  // failed".
+  const availability = await availabilityService.findAvailability({ now, preference });
+
+  const describe = (slot: availabilityService.Slot): string =>
+    `${slot.spokenTime} — slot_id ${slot.slotId}`;
+
+  // Facts, not sentences: "booked solid" and "we're closed" are the same empty
+  // list and completely different things to say.
+  if (availability.matched !== null) {
+    return { result: oneLine(`Available: ${describe(availability.matched)}.`) };
+  }
+
+  const alternatives = availability.alternatives.map(describe).join('; ');
+  if (alternatives.length === 0) {
+    return { result: oneLine('Nothing is open in the next two weeks.') };
+  }
+  if (availability.outsideClinicHours) {
+    return {
+      result: oneLine(`The clinic is open 9 to 5, weekdays. Nearest open: ${alternatives}.`),
+    };
+  }
+  if (availability.dayFullyBooked) {
+    return { result: oneLine(`That day is fully booked. Next open: ${alternatives}.`) };
+  }
+  return { result: oneLine(`That exact time is taken. Nearest open: ${alternatives}.`) };
 }
 
 async function bookAppointment(args: ToolCallArgs): Promise<ToolOutcome> {
