@@ -143,7 +143,7 @@ const tools = [
     function: {
       name: 'get_appointment_slots',
       description:
-        'Get the three mock appointment times currently on offer. Call only after create_patient has succeeded. Read the returned times to the caller and keep each slot_id exactly as given.',
+        'Get real open appointment times, optionally near what the caller asked for via `when`. Call only after create_patient has succeeded. The result states the situation in its own words — an exact match, the nearest alternatives, a fully-booked day, or outside opening hours — put that in your own words for the caller rather than reading it verbatim, and do not assume any fixed number of times comes back. Keep each slot_id exactly as given.',
       parameters: {
         type: 'object',
         properties: {

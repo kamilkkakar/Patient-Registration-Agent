@@ -10,6 +10,16 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { CLINIC_TIMEZONE, OPEN_MINUTES } from '../../src/config/clinic.js';
+import {
+  addClinicDays,
+  clinicWeekday,
+  utcToClinicDate,
+  zonedWallTimeToUtc,
+  type ClinicDate,
+} from '../../src/lib/clinic-time.js';
+import { bookAppointment as bookAppointmentDirect } from '../../src/services/appointment.js';
+import { clinicDayGrid } from '../../src/services/availability.js';
 import {
   api,
   prisma,
@@ -83,6 +93,35 @@ async function createPatient(suffix: string): Promise<string> {
     .send(validPayload({ last_name: testLastName(suffix) }));
   expect(res.status).toBe(201);
   return String((res.body.data as Record<string, unknown>)['patient_id']);
+}
+
+const WEEKDAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+/**
+ * The soonest weekday (Mon-Fri) at least `minDays` from clinic-local today.
+ *
+ * `parseWhen` only resolves a bare weekday name to the SOONEST matching date
+ * on or after today, so picking a day this way — rather than an arbitrary
+ * future date — is what makes `when: name` in these tests actually address
+ * the day this function computed. `minDays` >= 2 keeps clear of "today" and
+ * "tomorrow", which are what the earliest-slot-dependent tests elsewhere in
+ * this file implicitly rely on.
+ */
+function nextWeekdayAtLeast(minDays: number): { date: ClinicDate; name: string } {
+  const today = utcToClinicDate(new Date(), CLINIC_TIMEZONE);
+  for (let offset = minDays; offset <= 6; offset += 1) {
+    const candidate = addClinicDays(today, offset);
+    const weekday = clinicWeekday(candidate);
+    if (weekday >= 1 && weekday <= 5) {
+      return { date: candidate, name: WEEKDAY_NAMES[weekday]! };
+    }
+  }
+  throw new Error(`no weekday found at least ${String(minDays)} days out`);
+}
+
+/** The `slot-YYYY-MM-DDTHH:MMZ` id `availability.ts` would mint for this instant. */
+function slotIdFor(date: ClinicDate, minutesOfDay: number): string {
+  return `slot-${zonedWallTimeToUtc(date, minutesOfDay, CLINIC_TIMEZONE).toISOString().slice(0, 16)}Z`;
 }
 
 const SLOT_ID = /slot-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z/g;
@@ -504,16 +543,27 @@ describe('slots come from real availability', () => {
 });
 
 describe('get_appointment_slots with a spoken preference', () => {
-  it('answers a specific day and time', async () => {
+  it('answers a specific day and time with an exact match', async () => {
     // The call that failed: "do you have any time slot for Monday, 1 PM?"
+    //
+    // A bare `slot-...` id is NOT distinctive: it also appears in the
+    // near-miss, fully-booked and outside-hours results below. Deleting the
+    // `matched !== null` branch entirely and letting everything fall through
+    // to the generic "That exact time is taken" fallback would still satisfy
+    // a slot-id-only assertion — so this asserts the "Available:" wording
+    // that ONLY the exact-match branch produces, against a day/time picked
+    // fresh and known to be open (nothing else in this suite touches it).
+    const { date, name } = nextWeekdayAtLeast(2);
     const patientId = await createPatient('Whenquery');
+
     const { results } = await postTool(
-      specShape('wq1', 'get_appointment_slots', { patient_id: patientId, when: 'monday at 1 pm' }),
+      specShape('wq1', 'get_appointment_slots', { patient_id: patientId, when: `${name} at 9 am` }),
     );
 
     expect(results[0]?.error).toBeUndefined();
     expect(results[0]?.message).toBeUndefined();
-    expect(results[0]?.result).toMatch(/slot-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z/);
+    expect(results[0]?.result).toMatch(/^Available:/);
+    expect(results[0]?.result).toContain(slotIdFor(date, OPEN_MINUTES));
   });
 
   it('says the clinic is closed rather than inventing a time', async () => {
@@ -542,6 +592,53 @@ describe('get_appointment_slots with a spoken preference', () => {
     expect(results[0]?.error).toBeUndefined();
     expect(results[0]?.message).toBeUndefined();
     expect(results[0]?.result).toMatch(/open 9 to 5/i);
+    expect(results[0]?.result).toMatch(/slot-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z/);
+  });
+
+  it('says the day is fully booked, not merely empty or closed', async () => {
+    // WHY: a bare slot-id assertion cannot tell "booked solid" apart from a
+    // near-miss or an outside-hours day — both also carry a slot id. This
+    // pins the "fully booked" wording specifically, and books out every one
+    // of the day's 16 real grid slots (not a mock count) to get there.
+    const { date, name } = nextWeekdayAtLeast(4);
+    const patientId = await createPatient('Whenfullybooked');
+    for (const instant of clinicDayGrid(date)) {
+      await bookAppointmentDirect({ patientId, scheduledFor: instant });
+    }
+
+    const { results } = await postTool(
+      specShape('wq6', 'get_appointment_slots', { patient_id: patientId, when: name }),
+    );
+
+    expect(results[0]?.error).toBeUndefined();
+    expect(results[0]?.message).toBeUndefined();
+    expect(results[0]?.result).toMatch(/fully booked/i);
+    // Still offers other days — a booked-out Tuesday doesn't stop the caller
+    // hearing Wednesday.
+    expect(results[0]?.result).toMatch(/slot-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z/);
+  });
+
+  it('says the exact time is taken and offers the nearest alternative', async () => {
+    // WHY: distinct from BOTH the exact-match wording above and the
+    // fully-booked wording below — only ONE of the day's slots is taken, so
+    // `dayFullyBooked` is false and `matched` is null for a different reason
+    // than "the day is closed". This is the fallback branch a slot-id-only
+    // assertion could never distinguish from the other three.
+    const { date, name } = nextWeekdayAtLeast(3);
+    const other = await createPatient('Whentakenby');
+    await bookAppointmentDirect({
+      patientId: other,
+      scheduledFor: zonedWallTimeToUtc(date, OPEN_MINUTES, CLINIC_TIMEZONE),
+    });
+
+    const patientId = await createPatient('Whentaken');
+    const { results } = await postTool(
+      specShape('wq7', 'get_appointment_slots', { patient_id: patientId, when: `${name} at 9 am` }),
+    );
+
+    expect(results[0]?.error).toBeUndefined();
+    expect(results[0]?.message).toBeUndefined();
+    expect(results[0]?.result).toMatch(/^That exact time is taken\./);
     expect(results[0]?.result).toMatch(/slot-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z/);
   });
 
