@@ -191,6 +191,24 @@ describe('formatSpokenTime — clinic-local, not UTC', () => {
     expect(summerSlot.toISOString()).toBe('2026-07-06T18:00:00.000Z');
     expect(formatSpokenTime(summerSlot)).toBe('Monday, July 6 at 1 PM');
   });
+
+  it('renders a :30 slot with minutes included', () => {
+    const halfHourSlot = zonedWallTimeToUtc(MONDAY, 9 * 60 + 30, CLINIC_TIMEZONE);
+    expect(formatSpokenTime(halfHourSlot)).toBe('Monday, December 7 at 9:30 AM');
+  });
+
+  it('renders an on-the-hour slot without :00', () => {
+    const onTheHourSlot = zonedWallTimeToUtc(MONDAY, 9 * 60, CLINIC_TIMEZONE);
+    expect(formatSpokenTime(onTheHourSlot)).not.toContain(':00');
+  });
+
+  it('makes two adjacent 30-minute slots sound different', () => {
+    const slot1 = zonedWallTimeToUtc(MONDAY, 9 * 60, CLINIC_TIMEZONE);
+    const slot2 = zonedWallTimeToUtc(MONDAY, 9 * 60 + 30, CLINIC_TIMEZONE);
+    const time1 = formatSpokenTime(slot1);
+    const time2 = formatSpokenTime(slot2);
+    expect(time1).not.toBe(time2);
+  });
 });
 
 describe('parseSlotId', () => {

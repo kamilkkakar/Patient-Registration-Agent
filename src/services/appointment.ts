@@ -74,7 +74,16 @@ export function formatSpokenTime(scheduledFor: Date): string {
   const hour24 = Math.floor(clinicMinutes / 60);
   const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
   const meridiem = hour24 < 12 ? 'AM' : 'PM';
-  return `${weekday}, ${month} ${String(clinicDate.day)} at ${String(hour12)} ${meridiem}`;
+  const minute = clinicMinutes % 60;
+
+  // Include minutes only when non-zero. Slots are every 30 minutes; on-the-hour
+  // times like "9 AM" are how people speak them, and "9:00 AM" read by TTS is
+  // worse. Off-hour times like "9:30 AM" disambiguate adjacent 30-minute slots.
+  const timeStr = minute === 0
+    ? `${String(hour12)} ${meridiem}`
+    : `${String(hour12)}:${String(minute).padStart(2, '0')} ${meridiem}`;
+
+  return `${weekday}, ${month} ${String(clinicDate.day)} at ${timeStr}`;
 }
 
 // ---------------------------------------------------------------------------
