@@ -17,35 +17,48 @@ function clean(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9: ]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-/** Clinic-open check shared by every return path below — see resolveMeridiem. */
+/**
+ * Clinic-open check used only to pick between two readings of a bare,
+ * meridiem-less hour — never to reject a reading outright. Owner ruling
+ * (round-1 fix): this module reports the time it understood, even one the
+ * clinic doesn't offer. The availability layer has an `outsideClinicHours`
+ * flag whose entire purpose is to say "we're open 9 to 5 — nearest I have is
+ * 4:30"; nulling those times here makes that message unreachable and the
+ * caller hears the generic "sorry, what day were you thinking?" instead.
+ */
 function inHours(minutes: number): boolean {
   return minutes >= OPEN_MINUTES && minutes < CLOSE_MINUTES;
 }
 
 /**
- * Both readings of a bare hour, preferring the one inside clinic hours.
+ * Resolve an hour/minute pair to minutes past midnight.
  *
- * The clinic-hours check applies even when the meridiem is explicit. A caller
- * who says "eight PM" has given an unambiguous reading, but it is still not a
- * time the clinic offers — returning it anyway would be handing the booking
- * layer a start time it has to reject, when this layer already knows better.
+ * Explicit AM/PM ("seven PM") is reported as-is, unconditionally — it is not
+ * ambiguous, so there is nothing for clinic hours to decide. Only a bare hour
+ * with no stated meridiem ("seven") is genuinely ambiguous, and clinic hours
+ * break the tie: the reading that falls inside 9-5 wins ("one" -> 1 PM,
+ * "nine" -> 9 AM). That preference is the feature this module exists for and
+ * must not be diluted.
+ *
+ * If NEITHER reading of a bare hour is inside clinic hours (e.g. "seven": 7
+ * AM and 7 PM are both outside 9-5), a reading is still returned rather than
+ * null — per the same owner ruling above, this is a time we understood, just
+ * one the availability layer will flag. The fallback is PM, chosen because it
+ * is the same afternoon-leaning preference already encoded by checking
+ * morning before afternoon above: when both are shut, keep the code and the
+ * caller's intuition pointed the same direction. Which side of the coin flip
+ * a doubly-closed hour lands on has no real-world effect — availability
+ * reports outsideClinicHours and offers the nearest open slot regardless.
  */
-function resolveMeridiem(hour: number, minute: number, explicit: 'am' | 'pm' | null): number | null {
-  if (explicit === 'am') {
-    const value = hour === 12 ? minute : hour * 60 + minute;
-    return inHours(value) ? value : null;
-  }
-  if (explicit === 'pm') {
-    const value = (hour === 12 ? 12 : hour + 12) * 60 + minute;
-    return inHours(value) ? value : null;
-  }
+function resolveMeridiem(hour: number, minute: number, explicit: 'am' | 'pm' | null): number {
+  if (explicit === 'am') return hour === 12 ? minute : hour * 60 + minute;
+  if (explicit === 'pm') return (hour === 12 ? 12 : hour + 12) * 60 + minute;
 
   const morning = hour * 60 + minute;
   const afternoon = (hour < 12 ? hour + 12 : hour) * 60 + minute;
 
   if (inHours(morning)) return morning;
-  if (inHours(afternoon)) return afternoon;
-  return null;
+  return afternoon; // in-hours if open, else the documented tie-break
 }
 
 /** A spoken time -> clinic-local minutes past midnight, or null. */
@@ -70,6 +83,9 @@ export function parseSpokenTime(text: string): number | null {
     const hour = Number(digital[1]);
     const minute = Number(digital[2]);
     if (hour > 23 || minute > 59) return null;
+    // 24-hour input ("20:30") already names one specific hour — there is no
+    // AM/PM to disambiguate, so it bypasses resolveMeridiem and reports as-is
+    // like everything else, in or out of clinic hours.
     if (hour > 12) return hour * 60 + minute;
     return resolveMeridiem(hour, minute, explicit);
   }
@@ -100,7 +116,9 @@ export function parseSpokenTime(text: string): number | null {
     }
   }
 
-  // A bare hour: "one", "9", "nine o clock"
+  // A bare hour: "one", "9", "nine o clock", "eighteen" (HOUR_WORDS includes
+  // TEEN_WORDS, so plain 24-hour words reach here too — same as digital
+  // 24-hour input above, already unambiguous and reported as-is).
   for (const token of tokens) {
     const hour = wordFor(token);
     if (hour !== undefined && hour >= 1 && hour <= 23) {
