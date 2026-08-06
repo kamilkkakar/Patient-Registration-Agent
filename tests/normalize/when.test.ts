@@ -111,6 +111,38 @@ describe('parseWhen', () => {
     expect(parseWhen('as soon as possible', TODAY)).toEqual({ kind: 'any' });
   });
 
+  // Every case above asks for a weekday that is EQUAL TO or LATER IN THE WEEK
+  // than `today` (Monday), so `delta = (weekday - clinicWeekday(today) + 7) % 7`
+  // never needs the `+ 7` to stay non-negative — it would pass even if that
+  // term were deleted. These cases sit on the other side of the arithmetic:
+  // a weekday earlier in the week must still resolve to the soonest UPCOMING
+  // occurrence, not a negative delta that lands in the past.
+  it('rolls a backwards-looking weekday forward to next week', () => {
+    expect(parseWhen('sunday', TODAY)).toEqual({
+      kind: 'day', date: { year: 2026, month: 8, day: 9 },
+    });
+    expect(parseWhen('friday', TODAY)).toEqual({
+      kind: 'day', date: { year: 2026, month: 8, day: 7 },
+    });
+  });
+
+  it('rolls forward from late in the week too', () => {
+    const FRIDAY = { year: 2026, month: 8, day: 7 };
+    expect(parseWhen('tuesday', FRIDAY)).toEqual({
+      kind: 'day', date: { year: 2026, month: 8, day: 11 },
+    });
+  });
+
+  // The out-of-hours contract change (parseSpokenTime no longer nulls a time
+  // outside 9-5) needs to survive through parseWhen too, since the caller
+  // never sees parseSpokenTime directly — only the availability layer's
+  // outsideClinicHours flag is supposed to catch this, not a null here.
+  it('passes an out-of-hours time through instead of losing it', () => {
+    expect(parseWhen('monday at 7 pm', TODAY)).toEqual({
+      kind: 'time', date: TODAY, minutesOfDay: 19 * 60,
+    });
+  });
+
   it('returns null when nothing is recognisable', () => {
     expect(parseWhen('purple monkey', TODAY)).toBeNull();
   });
