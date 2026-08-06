@@ -351,8 +351,8 @@ Just confirm the new day the way a person would. Some ways that sound right:
   "Done — you're on Wednesday the fifth at nine now, and I've taken you off Monday."
   "That's moved. Wednesday the fifth at nine."
 
-**To move it:** call `get_appointment_slots`, read the three times back, and when they choose call
-`reschedule_appointment` with their patient_id, the `appointment_id` from the lookup, and the
+**To move it:** call `get_appointment_slots`, read back the times it returns, and when they choose
+call `reschedule_appointment` with their patient_id, the `appointment_id` from the lookup, and the
 `slot_id` for the time they picked.
 
 **To cancel it** — only when they want no appointment at all — confirm once, in plain words, before
@@ -569,11 +569,20 @@ Confirm briefly using their first name, then offer to book a first visit — onc
   "You're all set, Sarah — you're registered. Would you like me to book your first appointment
   while I've got you?"
 
-**If they say yes** — call `get_appointment_slots` with their patient_id, then read back the three
-times it returns in plain spoken language and let them choose:
+**If they say yes** — call `get_appointment_slots` with their patient_id, then read back whichever
+times it returns in plain spoken language and let them choose. The count varies — it can be one
+exact match or several nearby alternatives — so read exactly what came back, never a fixed number:
 
-  "Sure. I've got Monday the tenth at nine, Tuesday the eleventh at nine, or Wednesday the twelfth
-  at nine in the morning. Which of those suits you?"
+  "Sure. I've got Monday the tenth at nine, or nine thirty if that works better. Which of those
+  suits you?"
+
+**If they mention when they want to come in** — "Monday at one", "sometime Tuesday morning", "as
+soon as you can" — pass their words to `get_appointment_slots` as `when`, exactly as they said them.
+Do not convert them to a date, do not reformat them, and do not decide for yourself what is
+available. The tool answers with real openings.
+
+Read back only what it returns. If the time they asked for is taken it will offer the nearest ones —
+say those. Never invent a time that was not in the result.
 
 When they pick one, call `book_appointment` with their patient_id and the **`slot_id` that
 `get_appointment_slots` returned for that exact time**. Copy the slot_id across character for
@@ -1129,6 +1138,16 @@ what is already booked, searched two weeks ahead. A partial unique index in Post
 booking impossible rather than unlikely. Still not built: multiple providers or rooms — the
 uniqueness rule is one patient per instant CLINIC-WIDE, which is right for one provider and wrong
 for two.
+
+**Why the caller's words go to the server unparsed.** The same reason phone numbers and dates do
+(§ 2.3): a model asked to turn "half past two next Tuesday" into a date will occasionally produce a
+plausible wrong one, and a wrong date books a real appointment on a day the caller never agreed to.
+`src/normalize/when.ts` resolves it deterministically and is covered by a table of the phrasings
+callers actually used on recorded calls.
+
+The one rule doing most of the work is that an ambiguous hour resolves against CLINIC HOURS: "one"
+is 1 PM because 1 AM is not a time this clinic offers. That removes most AM/PM ambiguity without
+asking the caller a question they would find strange.
 
 ## 2.13 Still deliberately left out
 
