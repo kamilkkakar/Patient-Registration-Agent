@@ -4,6 +4,8 @@ A real U.S. phone number, answered by a voice agent. Speak naturally. Walk away 
 
 **Nora** is a warm intake coordinator: she greets you clearly, collects demographics including email, confirms them out loud, handles corrections, and only then saves. Optional insurance, emergency contact, and language are offered once — never forced.
 
+Once you're registered she offers you an appointment, and you can ask for one the way you'd ask a receptionist — *"Monday at one"*, *"Tuesday morning"*, *"as soon as possible"*. Availability is real: it's derived from what's already booked, in the clinic's own timezone, so a time she offers is a time you can actually have. Returning callers can move or cancel what they've got.
+
 ---
 
 ## Trying it
@@ -20,7 +22,10 @@ the public. There are two ways to exercise the voice path:
 
 The REST surface and dashboard can be exercised without any telephony at all — see [API](#api).
 
-Voice path verified end-to-end on a live inbound call (lookup → create → hangup, with transcript linked).
+Voice path verified end-to-end on a live inbound call (lookup → create → hangup, with transcript
+linked). Scheduling is verified end-to-end through the same webhook against production — register,
+ask for a time, book, move it, cancel it — but through HTTP rather than a microphone, so what the
+agent *says* about availability is the part still owed a dial.
 
 ---
 
@@ -56,8 +61,10 @@ One service handles both public REST and Vapi tool webhooks. Layers stay strict:
 | `src/routes/` | HTTP only — no Prisma |
 | `src/services/` | Business logic — **only** layer that touches the database |
 | `src/validation/` | Zod schemas |
-| `src/normalize/` | Spoken text → canonical values (pure, no I/O) |
+| `src/normalize/` | Spoken text → canonical values (pure, no I/O — no clock, no `Date` built from caller words) |
 | `src/vapi/` | Voice ingress → normalize → same services as REST |
+| `src/config/clinic.ts` | Opening hours, slot length, booking window, timezone — in one place |
+| `src/lib/clinic-time.ts` | Wall-clock ↔ UTC, DST-aware |
 | `prompts/intake-coordinator.md` | Versioned system prompt + engineering commentary |
 
 Voice and REST share the service layer but normalize differently on purpose: a REST client sends `"5125550142"`; a caller says *“five one two, five five five, oh one four two.”* Parsing belongs on the voice boundary, not in the LLM and not in the public API.
@@ -91,6 +98,7 @@ Every JSON response uses `{ "data": ..., "error": null }` — including errors.
 | `DELETE` | `/patients/:id` | Soft-delete; returns the tombstoned record |
 | `GET` | `/patients/:id/transcripts` | Call transcripts for that patient |
 | `GET` | `/patients/:id/appointments` | Appointments for that patient; `404` if unknown or soft-deleted |
+| `GET` | `/appointments` | All appointments, for the dashboard; excludes soft-deleted patients |
 | `GET` | `/health` | `503` if the database is down |
 | `GET` | `/` · `/dashboard` | Patients dashboard (HTML) |
 
@@ -119,6 +127,9 @@ curl -X POST "$API/patients" -H 'Content-Type: application/json' -d '{
 - `preferred_language` defaults to `English`
 - Phones are strict NANP (`5125550142` style) — not “any 10 digits”
 - Soft-delete is invisible on all read paths
+- **Appointments are the only scheduling state.** There is no slots or calendar table: open times are computed at query time from a generated day grid minus what is booked. A second table would have to be seeded, extended and reconciled — and the day it disagreed with `appointments`, a patient would be double-booked. Derivation makes that disagreement unrepresentable.
+- **Double-booking is a database constraint**, not a code path — a partial unique index on `scheduled_for WHERE status IN ('SCHEDULED','CONFIRMED')`. Prisma can't express it, so it's raw SQL in the migration. Two callers on the phone at once cannot take the same 2 PM whatever the service layer does; the loser is re-offered rather than told the system is down.
+- **`rescheduled_from`** records the time a booking moved away from, so *moved* stays legible as `SCHEDULED`. `CANCELLED` then means only one thing: cancelled outright, with nothing in its place.
 
 ---
 
@@ -135,6 +146,22 @@ Spoken forms are normalized in `src/normalize/` (covered by unit tests):
 | `sarah dot davis at gmail dot com` | `sarah.davis@gmail.com` |
 | `Texas` | `TX` |
 | `D-A-V-I-S, not D-A-V-I-E-S` | `Davis` |
+| `Monday at one` | the soonest Monday, 1 PM clinic-local |
+| `Tuesday morning` | the soonest Tuesday, slots before noon |
+| `the fifteenth` | the next 15th on the calendar |
+
+The agent passes the caller's words through untouched; the server interprets them. Asking the model
+to format is what produces non-deterministic parsing failures mid-call.
+
+Two rules earn their place here because breaking either put a wrong answer in a caller's ear:
+
+- **A bare number or ordinal needs evidence before it is read as a time or a date.** Without it,
+  *“in two weeks”* became 2 PM and *“first thing in the morning”* became the 1st of next month —
+  which, being past the booking window, had the agent telling someone asking for the *soonest* slot
+  that bookings don't open for two weeks.
+- **Unrecognised is better than misrecognised.** A phrase the parser can't place returns nothing and
+  the caller is simply offered the next open times. The two failures aren't symmetric, and the
+  guards lean toward the cheap one every time.
 
 ---
 
@@ -189,21 +216,46 @@ Once the API is publicly reachable, point Vapi at it. Re-running these is safe:
 than accumulate.
 
 ```bash
-node scripts/create-tools.mjs        # creates the five tools, attaches them to the assistant
+node scripts/create-tools.mjs        # creates the seven tools, attaches them to the assistant
 node scripts/create-assistant.mjs    # pushes the system prompt, voice and transcriber settings
 ```
 
-**Deploy before you provision.** Attaching a tool the running API does not implement means a caller
-who triggers it hears the agent stall mid-call — the API answers `Unknown tool`.
+**Deploy before you provision — the order is not a nicety.** The tool schemas are `.strict()`, so a
+tool definition offering an argument the running API does not accept field-fails *every* call that
+uses it. Attaching a tool the API does not implement at all is worse: the caller hears the agent
+stall mid-call while the API answers `Unknown tool`. Provision second, always.
+
+**Then read the assistant back**, rather than trusting the `200`:
+
+```bash
+curl -s -H "Authorization: Bearer $VAPI_API_KEY" \
+  https://api.vapi.ai/assistant/$VAPI_ASSISTANT_ID | jq '.firstMessage, .model.toolIds'
+```
+
+`PATCH` preserves keys you omit, so a field you meant to clear is still there unless you sent it
+empty explicitly — that is how a caller once heard the goodbye twice.
 
 ### Tests
 
 ```bash
 # Requires DATABASE_URL pointing at a real Postgres, with `npx prisma generate`
 # and `npx prisma migrate deploy` already run (see Local setup above).
-npm test
+npm test        # 489 tests, 43 files
 npm run typecheck
 ```
+
+The suite runs under `TZ=America/Los_Angeles`, on purpose — a DOB day-shift bug is invisible at UTC,
+where `new Date("02/15/1992")` happens to be right and is wrong everywhere else. A suite that only
+passes at UTC has not tested the thing that breaks.
+
+Two things it deliberately does **not** do, so its green is not read for more than it is worth:
+
+- It never asserts a particular appointment time. Availability is derived, so *which* slot comes back
+  depends on what is booked and what time it is — an assertion pinned to `9 AM` was green only when
+  the suite happened to run before the clinic opened. It checks the spoken form, and cross-checks the
+  booked time against the slot id through a *different* module than the formatter under test.
+- **It cannot hear the agent.** Nothing here reaches what Nora says out loud, and every regression
+  this project has shipped to a real caller was prompt-induced and invisible to a green suite.
 
 ---
 
