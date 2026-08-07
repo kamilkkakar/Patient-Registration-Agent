@@ -15,6 +15,7 @@ import {
   addClinicDays,
   clinicWeekday,
   utcToClinicDate,
+  utcToClinicMinutes,
   zonedWallTimeToUtc,
   type ClinicDate,
 } from '../../src/lib/clinic-time.js';
@@ -134,6 +135,16 @@ function slotIdFor(date: ClinicDate, minutesOfDay: number): string {
 const SLOT_ID = /slot-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z/g;
 
 /**
+ * How `formatSpokenTime` reads a slot aloud: "Friday, August 7 at 2:30 PM".
+ *
+ * Weekday alternation rather than `\w+` — a weekend in the offer is a domain
+ * error, and this is the assertion that would catch one leaking into the
+ * spoken text even if the slot ids somehow passed.
+ */
+const SPOKEN_FORM =
+  /(Monday|Tuesday|Wednesday|Thursday|Friday), [A-Z][a-z]+ \d{1,2} at \d{1,2}(:\d{2})? (AM|PM)/;
+
+/**
  * Take the offered ids from the tool's OWN response rather than querying
  * availability again: the offered set is derived from live bookings and `now`,
  * and a second, independent read could disagree with the first.
@@ -161,13 +172,15 @@ describe('get_appointment_slots', () => {
     // § G4: a line break in `result` is a parse error on Vapi's side.
     expect(result).not.toMatch(/[\r\n]/);
     // Spoken form, so the model can read the options out without inventing
-    // them. Pinned to "9 AM" year-round: the mock catalogue builds its slot at
-    // clinic-local 9 AM (zonedWallTimeToUtc), not a fixed UTC hour, so this
-    // holds regardless of DST.
-    expect(result).toMatch(/(Monday|Tuesday|Wednesday|Thursday|Friday), [A-Z][a-z]+ \d{1,2} at 9 AM/);
+    // them. NOT pinned to a fixed hour any more: availability is derived, so
+    // which times come back depends on what is booked and what time it is —
+    // the old `at 9 AM` assertion passed only when the suite happened to run
+    // before the clinic opened. The exact time is cross-checked against the
+    // slot id in the booking test below, where there is a single slot to check.
+    expect(result).toMatch(SPOKEN_FORM);
   });
 
-  it('never offers a weekend — the mock catalogue is the one domain rule it can get right', async () => {
+  it('never offers a weekend — the grid is generated, so a Saturday is a code defect', async () => {
     const patientId = await createPatient('Slotsweekday');
 
     const { slotIds } = await offerSlots('tc-slots-weekday', patientId);
@@ -227,13 +240,32 @@ describe('book_appointment', () => {
     expect(status).toBe(200);
     expect(results[0]?.error).toBeUndefined();
     expect(results[0]?.message).toBeUndefined();
-    // Same "pinned to 9 AM year-round" reasoning as get_appointment_slots above.
-    expect(results[0]?.result).toMatch(/^Booked\. Appointment on .+ at 9 AM\.$/);
+    // Same spoken-form reasoning as get_appointment_slots above, anchored so
+    // the confirmation is that sentence and nothing else.
+    expect(results[0]?.result).toMatch(
+      new RegExp(`^Booked\\. Appointment on ${SPOKEN_FORM.source}\\.$`),
+    );
 
     // The confirmation repeats the SAME time that was offered — a booking the
     // caller was never read is worse than no booking.
     const spoken = /^Booked\. Appointment on (.+)\.$/.exec(results[0]?.result ?? '')?.[1] ?? '';
     expect(result).toContain(spoken);
+
+    // And it is the time the slot id actually encodes, in CLINIC-local hours.
+    // Recomputed here from the timezone helper rather than from the formatter
+    // under test, which is what makes this able to fail: 1 PM Central was once
+    // read back as "7 PM" (the formatter read UTC), and three distinct times
+    // were once all spoken as whole hours ("9 AM, 9 AM, 10 AM" — the minutes
+    // were dropped). A shape-only regex passes both of those.
+    const bookedMinutes = utcToClinicMinutes(new Date(slotId.slice(5)), CLINIC_TIMEZONE);
+    const hour24 = Math.floor(bookedMinutes / 60);
+    const minute = bookedMinutes % 60;
+    const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+    const expectedTime =
+      minute === 0
+        ? `${hour12} ${hour24 < 12 ? 'AM' : 'PM'}`
+        : `${hour12}:${String(minute).padStart(2, '0')} ${hour24 < 12 ? 'AM' : 'PM'}`;
+    expect(spoken.endsWith(` at ${expectedTime}`)).toBe(true);
 
     const rows = await prisma.appointment.findMany({ where: { patientId } });
     expect(rows).toHaveLength(1);

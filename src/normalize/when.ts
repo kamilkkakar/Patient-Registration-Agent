@@ -271,7 +271,7 @@ const DAY_OF_MONTH_FOLLOWERS = new Set([
   'at', 'in', 'of', 'or', 'around',
   'morning', 'afternoon', 'evening', 'night',
   'am', 'pm',
-  'please', 'works', 'then',
+  'please', 'works', 'then', 'if', 'would',
 ]);
 
 /**
