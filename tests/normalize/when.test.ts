@@ -212,6 +212,23 @@ describe('parseWhen — calendar dates', () => {
     expect(parseWhen('monday', TODAY)).toEqual({ kind: 'day', date: TODAY });
   });
 
+  // An ordinal sitting in front of a noun it modifies is not a date. Each of
+  // these used to resolve to a day the caller never named — "first thing in the
+  // morning" came back as September 1st, far enough ahead that the agent
+  // answered "bookings only open two weeks ahead" to someone asking for the
+  // SOONEST slot. Asserting on `date` specifically is the point: two of the
+  // three still parse, and a shape-only assertion passes with the bug present.
+  it('does not read an ordinal that modifies a noun as a day of the month', () => {
+    expect(parseWhen('first thing in the morning', TODAY)).toEqual({
+      kind: 'daypart', date: null, part: 'morning',
+    });
+    expect(parseWhen('in the second week', TODAY)).toBeNull();
+    expect(parseWhen('second opinion', TODAY)).toBeNull();
+    // Naming a month does not license the same misread: this resolved to
+    // August 2nd, and — the 2nd having gone — rolled a full year to 2027.
+    expect(parseWhen('the second week of august', TODAY)).toBeNull();
+  });
+
   it('does not let "first available" become the first of the month', () => {
     // OPEN_REQUEST is tested before any date parsing; "first" is also an
     // ORDINAL_WORDS entry, so the ordering is load-bearing.

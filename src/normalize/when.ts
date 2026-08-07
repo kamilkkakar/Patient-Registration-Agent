@@ -253,6 +253,39 @@ function dayOfMonthAt(
   return null;
 }
 
+/**
+ * Words that may follow a spoken day-of-month, plus end-of-utterance.
+ *
+ * An ordinal on its own is not evidence of a date — "first thing in the
+ * morning", "in the second week" and "second opinion" all put an ordinal in
+ * front of a noun it modifies. Without this gate those read as the 1st, the 2nd
+ * and the 2nd, and the caller hears a date they never said. This is the same
+ * positive-evidence shape `DURATION_WORDS` gives the bare-hour scan.
+ *
+ * Deliberately an allow-list, not a list of nouns to reject. The two failures
+ * are not symmetric: a follower we forgot to allow returns null and the caller
+ * is offered the next open times, while a noun we forgot to reject books them
+ * into a month they never mentioned.
+ */
+const DAY_OF_MONTH_FOLLOWERS = new Set([
+  'at', 'in', 'of', 'or', 'around',
+  'morning', 'afternoon', 'evening', 'night',
+  'am', 'pm',
+  'please', 'works', 'then',
+]);
+
+/**
+ * Is the ordinal at `i`, spanning `length` tokens, being used as a date?
+ *
+ * Only the IMMEDIATE next token is consulted. Scanning further would allow
+ * "first thing in the morning" on the strength of its "in", which is exactly
+ * the phrase this rejects.
+ */
+function readsAsDayOfMonth(tokens: string[], i: number, length: number): boolean {
+  const next = tokens[i + length];
+  return next === undefined || DAY_OF_MONTH_FOLLOWERS.has(next);
+}
+
 /** The soonest occurrence of a bare day-of-month: this month, else a later one. */
 function nextDayOfMonth(today: ClinicDate, day: number): ClinicDate | null {
   for (let ahead = 0; ahead <= 12; ahead += 1) {
@@ -312,6 +345,9 @@ function parseCalendarDate(
       if (j === i) continue;
       const spelled = dayOfMonthAt(tokens, j, false);
       if (spelled === null) continue;
+      // Naming a month is not licence to read every ordinal in the sentence:
+      // "the second week of august" would otherwise resolve to August 2nd.
+      if (!readsAsDayOfMonth(tokens, j, spelled.length)) continue;
       const date = nextMonthDay(today, month, spelled.day);
       if (date !== null) return { date, used: found(j, spelled, i) };
     }
@@ -325,6 +361,7 @@ function parseCalendarDate(
   for (let i = 0; i < tokens.length; i += 1) {
     const spelled = dayOfMonthAt(tokens, i, false);
     if (spelled === null) continue;
+    if (!readsAsDayOfMonth(tokens, i, spelled.length)) continue;
     const date = nextDayOfMonth(today, spelled.day);
     if (date !== null) return { date, used: found(i, spelled) };
   }
