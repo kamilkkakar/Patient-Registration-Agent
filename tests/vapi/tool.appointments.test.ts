@@ -10,7 +10,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { CLINIC_TIMEZONE, OPEN_MINUTES } from '../../src/config/clinic.js';
+import { CLINIC_TIMEZONE, OPEN_MINUTES, SEARCH_WINDOW_DAYS } from '../../src/config/clinic.js';
 import {
   addClinicDays,
   clinicWeekday,
@@ -96,6 +96,13 @@ async function createPatient(suffix: string): Promise<string> {
 }
 
 const WEEKDAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+// Hand-rolled rather than via Intl: these are fed back to `parseWhen` as
+// caller words, and ICU month names vary by Node build.
+const MONTH_NAMES = [
+  'january', 'february', 'march', 'april', 'may', 'june',
+  'july', 'august', 'september', 'october', 'november', 'december',
+];
 
 /**
  * The soonest weekday (Mon-Fri) at least `minDays` from clinic-local today.
@@ -661,6 +668,33 @@ describe('get_appointment_slots with a spoken preference', () => {
     expect(results[0]?.result).toMatch(/^Available:/);
     expect(results[0]?.result).not.toMatch(/taken/i);
     expect(results[0]?.result).toContain(slotIdFor(date, OPEN_MINUTES));
+  });
+
+  it('says a far-off date is past the booking window, NOT that it is full', async () => {
+    // WHY at the tool layer and not only in availability.test.ts: the defect
+    // this whole review is about was a correct service flag paired with the
+    // wrong sentence. Service coverage would not have caught it.
+    //
+    // This date is only reachable now that parseWhen reads calendar dates —
+    // no weekday name can land more than 6 days out. Nothing on that day is
+    // booked, so "That day is fully booked" would be a plain falsehood.
+    const today = utcToClinicDate(new Date(), CLINIC_TIMEZONE);
+    const farOff = addClinicDays(today, SEARCH_WINDOW_DAYS + 7);
+    const patientId = await createPatient('Whenfaroff');
+
+    const { results } = await postTool(
+      specShape('wq9', 'get_appointment_slots', {
+        patient_id: patientId,
+        when: `${MONTH_NAMES[farOff.month - 1]!} ${String(farOff.day)}`,
+      }),
+    );
+
+    expect(results[0]?.error).toBeUndefined();
+    expect(results[0]?.message).toBeUndefined();
+    expect(results[0]?.result).toMatch(/two weeks ahead/i);
+    expect(results[0]?.result).not.toMatch(/fully booked/i);
+    // Still offers what IS bookable — "not that far ahead" is not "nothing".
+    expect(results[0]?.result).toMatch(/slot-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z/);
   });
 
   it('treats unparseable words as a FIELD failure so the model re-asks', async () => {
