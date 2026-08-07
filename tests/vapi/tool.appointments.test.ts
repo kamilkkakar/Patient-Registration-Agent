@@ -642,6 +642,27 @@ describe('get_appointment_slots with a spoken preference', () => {
     expect(results[0]?.result).toMatch(/slot-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z/);
   });
 
+  it('answers a plain day with availability WITHOUT claiming a time was taken', async () => {
+    // WHY: the single most common successful query — "can I come in on
+    // Tuesday?" — had no test at all, and shipped saying "That exact time is
+    // taken" for a caller who named no time. `matched` is null for a `day`
+    // query BY CONSTRUCTION (findAvailability only ever sets it on the `time`
+    // branch), so null cannot mean "your time was taken" here. The negative
+    // assertion is the one that bites: a slot-id-only check passed throughout.
+    const { date, name } = nextWeekdayAtLeast(2);
+    const patientId = await createPatient('Whenplainday');
+
+    const { results } = await postTool(
+      specShape('wq8', 'get_appointment_slots', { patient_id: patientId, when: name }),
+    );
+
+    expect(results[0]?.error).toBeUndefined();
+    expect(results[0]?.message).toBeUndefined();
+    expect(results[0]?.result).toMatch(/^Available:/);
+    expect(results[0]?.result).not.toMatch(/taken/i);
+    expect(results[0]?.result).toContain(slotIdFor(date, OPEN_MINUTES));
+  });
+
   it('treats unparseable words as a FIELD failure so the model re-asks', async () => {
     const patientId = await createPatient('Whenjunk');
     const { results } = await postTool(
@@ -653,6 +674,12 @@ describe('get_appointment_slots with a spoken preference', () => {
   });
 
   it('still works with no preference at all', async () => {
+    // The core registration path: Nora asks "shall I book your first
+    // appointment?", the caller says "yes please", and no `when` is sent.
+    // `/slot-/` matched every branch, so this test stayed green while the
+    // answer regressed to "That exact time is taken" — a sentence about a time
+    // the caller never named. Phase A (live) says "Available:" here and this
+    // pins that wording back.
     const patientId = await createPatient('Whennone');
     const { results } = await postTool(
       specShape('wq4', 'get_appointment_slots', { patient_id: patientId }),
@@ -660,6 +687,8 @@ describe('get_appointment_slots with a spoken preference', () => {
 
     expect(results[0]?.error).toBeUndefined();
     expect(results[0]?.message).toBeUndefined();
+    expect(results[0]?.result).toMatch(/^Available:/);
+    expect(results[0]?.result).not.toMatch(/taken/i);
     expect(results[0]?.result).toMatch(/slot-/);
   });
 });

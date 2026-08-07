@@ -45,7 +45,7 @@ export const TENS_WORDS: Record<string, number | undefined> = {
 
 export type NumberItem = { kind: 'num'; value: number; digits: string };
 type MonthItem = { kind: 'month'; value: number };
-export type Item = NumberItem | MonthItem;
+type Item = NumberItem | MonthItem;
 
 /** Turn cleaned text into an ordered list of month markers and numbers. */
 export function tokenize(text: string): Item[] {

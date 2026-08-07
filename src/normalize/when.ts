@@ -6,13 +6,26 @@
 
 import { CLOSE_MINUTES, OPEN_MINUTES } from '../config/clinic.js';
 import { addClinicDays, clinicWeekday, type ClinicDate } from '../lib/clinic-time.js';
-import { TEEN_WORDS, TENS_WORDS, UNIT_WORDS } from './words.js';
+import { MONTH_WORDS, ORDINAL_WORDS, TEEN_WORDS, TENS_WORDS, UNIT_WORDS } from './words.js';
 
 const HOUR_WORDS: Record<string, number | undefined> = {
   ...UNIT_WORDS,
   ...TEEN_WORDS,
   twelve: 12,
 };
+
+/**
+ * Words that make the number before them a quantity, never an hour.
+ *
+ * "In two weeks" is the caller changing the subject to a horizon, not naming
+ * 2 PM. Note "second" is deliberately absent: it is an ORDINAL_WORDS entry
+ * ("the second") and the calendar-date reading is far likelier than someone
+ * timing an appointment in seconds.
+ */
+const DURATION_WORDS = new Set([
+  'week', 'weeks', 'day', 'days', 'month', 'months', 'year', 'years',
+  'hour', 'hours', 'minute', 'minutes',
+]);
 
 function clean(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9: ]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -107,25 +120,64 @@ export function parseSpokenTime(text: string): number | null {
     return resolveMeridiem(prevHour, 60 - offset, explicit);
   }
 
-  // "one thirty", "nine fifteen"
+  // "one thirty", "nine fifteen", "four forty five", "eighteen thirty"
   for (let i = 0; i < tokens.length - 1; i += 1) {
     const hour = wordFor(tokens[i]);
+    if (hour === undefined || hour < 1 || hour > 23) continue;
+
     const nextToken = tokens[i + 1];
-    const minute = nextToken === undefined ? undefined : TENS_WORDS[nextToken] ?? TEEN_WORDS[nextToken];
-    if (hour !== undefined && hour <= 12 && minute !== undefined && minute < 60) {
-      return resolveMeridiem(hour, minute, explicit);
+    const tens = nextToken === undefined ? undefined : TENS_WORDS[nextToken];
+    let minute = nextToken === undefined ? undefined : tens ?? TEEN_WORDS[nextToken];
+    if (minute === undefined || minute >= 60) continue;
+
+    // "four forty five" is 4:45, not 4:40 — the unit word trailing a tens word
+    // belongs to the minutes. Without this the minute silently truncates and
+    // the caller is offered a time they did not say.
+    if (tens !== undefined) {
+      const unit = UNIT_WORDS[tokens[i + 2] ?? ''];
+      if (unit !== undefined && unit > 0 && tens + unit < 60) minute = tens + unit;
     }
+
+    // A 24-hour hour word ("eighteen thirty") already names one hour, so there
+    // is no meridiem to resolve — same as digital 24-hour input above.
+    if (hour > 12) return hour * 60 + minute;
+    return resolveMeridiem(hour, minute, explicit);
   }
 
   // A bare hour: "one", "9", "nine o clock", "eighteen" (HOUR_WORDS includes
   // TEEN_WORDS, so plain 24-hour words reach here too — same as digital
   // 24-hour input above, already unambiguous and reported as-is).
-  for (const token of tokens) {
-    const hour = wordFor(token);
-    if (hour !== undefined && hour >= 1 && hour <= 23) {
-      if (hour > 12) return hour * 60;
-      return resolveMeridiem(hour, 0, explicit);
-    }
+  //
+  // A number on its own is NOT evidence of a time. "In two weeks" and "in
+  // three days" are quantities; reading them as 2 PM and 3 PM converts "I did
+  // not understand you" into a confident wrong answer, and this module's null
+  // return — the model's cue to ask again in its own words — is the only
+  // safety valve the design has. So a number counts as an hour only when the
+  // utterance supports it: a stated meridiem, an "o'clock", a preceding "at",
+  // or nothing else numeric to compete with it. That last clause is what
+  // keeps the ambiguity rule's headline case, a bare "three", working.
+  const spokenNumbers = tokens.filter((token) => {
+    const value = wordFor(token);
+    return value !== undefined && value >= 1 && value <= 23;
+  });
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const hour = wordFor(tokens[i]);
+    if (hour === undefined || hour < 1 || hour > 23) continue;
+
+    const next = tokens[i + 1];
+    if (next !== undefined && DURATION_WORDS.has(next)) continue;
+
+    const timeLike =
+      explicit !== null ||
+      next === 'oclock' ||
+      (next === 'o' && tokens[i + 2] === 'clock') ||
+      tokens[i - 1] === 'at' ||
+      spokenNumbers.length === 1;
+    if (!timeLike) continue;
+
+    if (hour > 12) return hour * 60;
+    return resolveMeridiem(hour, 0, explicit);
   }
 
   return null;
@@ -161,6 +213,125 @@ function nextWeekday(today: ClinicDate, weekday: number): ClinicDate {
   return addClinicDays(today, delta);
 }
 
+/** Does this civil date exist? Date.UTC rolls Feb 30 into March rather than failing. */
+function isRealDate(year: number, month: number, day: number): boolean {
+  const probe = new Date(Date.UTC(year, month - 1, day));
+  return probe.getUTCMonth() + 1 === month && probe.getUTCDate() === day;
+}
+
+/**
+ * A day-of-month spoken at `tokens[i]`, and how many tokens it used.
+ *
+ * `bareDigits` is off unless a month word is sitting next to the number:
+ * "the twentieth" is a date, a naked "20" is an hour. The twenty-first through
+ * thirty-first are compounds — ORDINAL_WORDS stops at "twentieth" — and
+ * missing that would read "the twenty first" as the FIRST, a wrong date rather
+ * than an unparsed one.
+ */
+function dayOfMonthAt(
+  tokens: string[],
+  i: number,
+  bareDigits: boolean,
+): { day: number; length: number } | null {
+  const token = tokens[i];
+  if (token === undefined) return null;
+
+  const tens = TENS_WORDS[token];
+  if (tens === 20 || tens === 30) {
+    const unit = ORDINAL_WORDS[tokens[i + 1] ?? ''];
+    if (unit !== undefined && unit <= 9) return { day: tens + unit, length: 2 };
+  }
+
+  const ordinal = ORDINAL_WORDS[token];
+  if (ordinal !== undefined) return { day: ordinal, length: 1 };
+
+  const suffixed = /^(\d{1,2})(st|nd|rd|th)$/.exec(token);
+  if (suffixed !== null) return { day: Number(suffixed[1]), length: 1 };
+
+  if (bareDigits && /^\d{1,2}$/.test(token)) return { day: Number(token), length: 1 };
+
+  return null;
+}
+
+/** The soonest occurrence of a bare day-of-month: this month, else a later one. */
+function nextDayOfMonth(today: ClinicDate, day: number): ClinicDate | null {
+  for (let ahead = 0; ahead <= 12; ahead += 1) {
+    const month = ((today.month - 1 + ahead) % 12) + 1;
+    const year = today.year + Math.floor((today.month - 1 + ahead) / 12);
+    if (ahead === 0 && day < today.day) continue;
+    if (isRealDate(year, month, day)) return { year, month, day };
+  }
+  return null;
+}
+
+/** A named month and day within the coming year. */
+function nextMonthDay(today: ClinicDate, month: number, day: number): ClinicDate | null {
+  for (const year of [today.year, today.year + 1]) {
+    if (year === today.year && month * 100 + day < today.month * 100 + today.day) continue;
+    if (isRealDate(year, month, day)) return { year, month, day };
+  }
+  return null;
+}
+
+/**
+ * A spoken calendar date, plus the token indexes it consumed.
+ *
+ * The consumption is the point. "August 20" must not also be read as 8 PM by
+ * the time parser, and stripping the tokens a date has already claimed is a
+ * cheaper guarantee than teaching the time parser about months.
+ */
+function parseCalendarDate(
+  tokens: string[],
+  today: ClinicDate,
+): { date: ClinicDate; used: Set<number> } | null {
+  const found = (from: number, day: { day: number; length: number }, monthIndex?: number) => {
+    const used = new Set<number>();
+    for (let n = 0; n < day.length; n += 1) used.add(from + n);
+    if (monthIndex !== undefined) used.add(monthIndex);
+    return used;
+  };
+
+  let namedAMonth = false;
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const month = MONTH_WORDS[tokens[i] ?? ''];
+    if (month === undefined) continue;
+    namedAMonth = true;
+
+    // "august 20", "august twentieth", "august twenty first".
+    const adjacent = dayOfMonthAt(tokens, i + 1, true);
+    if (adjacent !== null) {
+      const date = nextMonthDay(today, month, adjacent.day);
+      if (date !== null) return { date, used: found(i + 1, adjacent, i) };
+      continue;
+    }
+
+    // "the twentieth of august" — bare digits are NOT accepted at a distance,
+    // or "the fifth of august at 2" would read the 2 as the day.
+    for (let j = 0; j < tokens.length; j += 1) {
+      if (j === i) continue;
+      const spelled = dayOfMonthAt(tokens, j, false);
+      if (spelled === null) continue;
+      const date = nextMonthDay(today, month, spelled.day);
+      if (date !== null) return { date, used: found(j, spelled, i) };
+    }
+  }
+
+  // "the fifteenth" with no month at all. Skipped once a month HAS been named
+  // and did not resolve: "February thirtieth" is a caller misspeaking, and
+  // answering it with August 30th is worse than asking them again.
+  if (namedAMonth) return null;
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const spelled = dayOfMonthAt(tokens, i, false);
+    if (spelled === null) continue;
+    const date = nextDayOfMonth(today, spelled.day);
+    if (date !== null) return { date, used: found(i, spelled) };
+  }
+
+  return null;
+}
+
 /** Spoken preference -> structured query, or null if nothing is recognisable. */
 export function parseWhen(text: string, today: ClinicDate): WhenQuery | null {
   const t = clean(text);
@@ -169,13 +340,17 @@ export function parseWhen(text: string, today: ClinicDate): WhenQuery | null {
   if (OPEN_REQUEST.test(t)) return { kind: 'any' };
 
   let date: ClinicDate | null = null;
+  const tokens = t.split(' ');
+  // What is left after a calendar date has claimed its words. A token cannot
+  // be both the day of the month and the hour.
+  let remaining = t;
 
   if (/\btomorrow\b/.test(t)) {
     date = addClinicDays(today, 1);
   } else if (/\btoday\b/.test(t)) {
     date = today;
   } else {
-    for (const token of t.split(' ')) {
+    for (const token of tokens) {
       const weekday = WEEKDAY_WORDS[token];
       if (weekday !== undefined) {
         // "next Tuesday" is the soonest Tuesday — see the test for why.
@@ -183,9 +358,20 @@ export function parseWhen(text: string, today: ClinicDate): WhenQuery | null {
         break;
       }
     }
+
+    // A named weekday wins over a calendar date on purpose: "Monday the tenth"
+    // said in a week whose tenth is a Thursday is a caller misremembering, and
+    // the weekday is the part they are surer of.
+    if (date === null) {
+      const calendar = parseCalendarDate(tokens, today);
+      if (calendar !== null) {
+        date = calendar.date;
+        remaining = tokens.filter((_, i) => !calendar.used.has(i)).join(' ');
+      }
+    }
   }
 
-  const minutesOfDay = parseSpokenTime(t);
+  const minutesOfDay = parseSpokenTime(remaining);
   if (minutesOfDay !== null) return { kind: 'time', date, minutesOfDay };
 
   // A daypart only counts when no specific time was found — "1 in the

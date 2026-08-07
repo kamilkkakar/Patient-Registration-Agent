@@ -375,15 +375,32 @@ async function getAppointmentSlots(args: ToolCallArgs): Promise<ToolOutcome> {
   if (alternatives.length === 0) {
     return { result: oneLine('Nothing is open in the next two weeks.') };
   }
-  if (availability.outsideClinicHours) {
-    return {
-      result: oneLine(`The clinic is open 9 to 5, weekdays. Nearest open: ${alternatives}.`),
-    };
+
+  // One sentence per reason, chosen by `unmetReason` rather than by guessing
+  // from `matched === null`. `matched` is only ever set on the `time` branch,
+  // so for `any`, `day` and `daypart` a null match means "the caller named no
+  // time" — offering times IS the answer there, and it must not borrow the
+  // wording for a time that was asked for and lost.
+  switch (availability.unmetReason) {
+    case 'closed':
+      return {
+        result: oneLine(`The clinic is open 9 to 5, weekdays. Nearest open: ${alternatives}.`),
+      };
+    case 'beyond-horizon':
+      return {
+        result: oneLine(`Bookings only open two weeks ahead. Nearest open: ${alternatives}.`),
+      };
+    case 'fully-booked':
+      return { result: oneLine(`That day is fully booked. Next open: ${alternatives}.`) };
+    case 'day-over':
+      return { result: oneLine(`That day is already over. Next open: ${alternatives}.`) };
+    case 'time-passed':
+      return { result: oneLine(`That time has already passed. Nearest open: ${alternatives}.`) };
+    case 'time-taken':
+      return { result: oneLine(`That exact time is taken. Nearest open: ${alternatives}.`) };
+    case null:
+      return { result: oneLine(`Available: ${alternatives}.`) };
   }
-  if (availability.dayFullyBooked) {
-    return { result: oneLine(`That day is fully booked. Next open: ${alternatives}.`) };
-  }
-  return { result: oneLine(`That exact time is taken. Nearest open: ${alternatives}.`) };
 }
 
 async function bookAppointment(args: ToolCallArgs): Promise<ToolOutcome> {

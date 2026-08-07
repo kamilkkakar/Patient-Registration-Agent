@@ -50,6 +50,7 @@ describe('findAvailability', () => {
     expect(result.matched).not.toBeNull();
     expect(utcToClinicMinutes(result.matched!.scheduledFor, CLINIC_TIMEZONE)).toBe(13 * 60);
     expect(result.outsideClinicHours).toBe(false);
+    expect(result.unmetReason).toBeNull();
   });
 
   it('offers the NEAREST open times when the exact one is taken', async () => {
@@ -64,6 +65,9 @@ describe('findAvailability', () => {
     });
 
     expect(result.matched).toBeNull();
+    // The one case where "that exact time is taken" is a true sentence: they
+    // named 1 PM, 1 PM exists, and someone else has it.
+    expect(result.unmetReason).toBe('time-taken');
     expect(result.alternatives.length).toBeGreaterThan(0);
     const offered = result.alternatives.map((s) => utcToClinicMinutes(s.scheduledFor, CLINIC_TIMEZONE));
     expect(offered).toContain(12 * 60 + 30);
@@ -168,6 +172,77 @@ describe('findAvailability', () => {
   it('caps what it returns so the tool result stays speakable', async () => {
     const result = await findAvailability({ now: NOW, preference: { kind: 'any' } });
     expect(result.alternatives.length).toBeLessThanOrEqual(3);
+  });
+
+  it('leaves unmetReason null when the caller named nothing to miss', async () => {
+    // WHY: this is the whole of finding 1. `matched` is null here BY
+    // CONSTRUCTION — only the `time` branch ever sets it — so a reader that
+    // infers "their time was taken" from a null match is reading a fact that
+    // was never recorded. The core registration path (no `when` at all) is
+    // exactly this call.
+    const result = await findAvailability({ now: NOW, preference: { kind: 'any' } });
+
+    expect(result.matched).toBeNull();
+    expect(result.unmetReason).toBeNull();
+  });
+
+  it('says a day is OVER, not booked out, once its last slot has gone', async () => {
+    // 17:00 Central on the requested Monday: nothing was booked and the clinic
+    // is not shut on Mondays, so neither existing flag fires — and a null
+    // reason would have the agent answer "Available: Wednesday..." as though
+    // Monday had been honoured.
+    const result = await findAvailability({
+      now: at(17 * 60),
+      preference: { kind: 'day', date: MONDAY },
+    });
+
+    expect(result.dayFullyBooked).toBe(false);
+    expect(result.outsideClinicHours).toBe(false);
+    expect(result.unmetReason).toBe('day-over');
+  });
+
+  it('says a time has PASSED rather than been taken', async () => {
+    // 10 AM asked for at 2:45 PM the same day. Nobody took it — it went by.
+    // 10 AM is deliberately a slot no other test books, so "taken" is not just
+    // an unlucky wording for a true fact: without the elapsed check this reads
+    // "That exact time is taken", which is false.
+    const result = await findAvailability({
+      now: at(14 * 60 + 45),
+      preference: { kind: 'time', date: MONDAY, minutesOfDay: 10 * 60 },
+    });
+
+    expect(result.matched).toBeNull();
+    expect(result.dayFullyBooked).toBe(false);
+    expect(result.unmetReason).toBe('time-passed');
+    expect(result.alternatives.length).toBeGreaterThan(0);
+  });
+
+  it('refuses to call a day beyond the booking window "fully booked"', async () => {
+    // SEARCH_WINDOW_DAYS is 14 and `openInstants` walks offsets 0..14
+    // INCLUSIVE, so from Thursday 3 December the last bookable day is
+    // Thursday 17 December. Both days below are ordinary weekdays with a full
+    // 16-slot grid; the only thing separating them is the horizon.
+    //
+    // The failure this pins: a day past the window has every grid slot ahead
+    // of `now` and no open instants, which is indistinguishable from "all 16
+    // are booked" unless the horizon is checked first. The agent would tell a
+    // caller 18 December is completely full when not one slot on it is taken.
+    const insideWindow = await findAvailability({
+      now: NOW,
+      preference: { kind: 'day', date: { year: 2026, month: 12, day: 17 } },
+    });
+    expect(insideWindow.unmetReason).toBeNull();
+    expect(insideWindow.alternatives.length).toBeGreaterThan(0);
+
+    const pastWindow = await findAvailability({
+      now: NOW,
+      preference: { kind: 'day', date: { year: 2026, month: 12, day: 18 } },
+    });
+    expect(pastWindow.dayFullyBooked).toBe(false);
+    expect(pastWindow.outsideClinicHours).toBe(false);
+    expect(pastWindow.unmetReason).toBe('beyond-horizon');
+    // Still offers what IS bookable — "not that far ahead" is not "nothing".
+    expect(pastWindow.alternatives.length).toBeGreaterThan(0);
   });
 });
 
