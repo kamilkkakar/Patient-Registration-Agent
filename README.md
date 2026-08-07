@@ -34,7 +34,9 @@ Voice path verified end-to-end on a live inbound call (lookup → create → han
 - **Full-row deduplication** — identical demographics reuse the existing patient; shared household phones still get separate records
 - **Returning-caller update offer** via phone lookup (separate from dedupe)
 - **Call transcripts** linked to the patient when the call registered one
-- **Mock appointment scheduling** offered after a successful save — three computed weekday slots, booked by id
+- **Appointment scheduling** offered after a successful save — book, reschedule, cancel
+- **Real availability** derived from what is already booked, in clinic-local time, DST-aware
+- **Spoken time queries** — *“Monday at one”*, *“Tuesday morning”*, *“the fifteenth”*, *“as soon as possible”*
 - **Read-only dashboard** for reviewers — one static HTML page, same origin as the API
 
 ---
@@ -226,6 +228,7 @@ Each named scenario has a *decided* behavior, not an accidental one. Rows that a
 | **Out-of-order answers** | Anything the caller volunteers early is kept and never asked for again; the model records both values and skips the question it no longer needs. Memory rule, not a state machine. | `prompts/intake-coordinator.md` § “Take everything they give you”, § 2.8. **Voice-verified** on a live call — the caller added an email after the read-back; Nora collected it and saved. |
 | **Barge-in mid read-back** | Nora stops, takes the interruption as the turn, fixes that field and resumes the read-back from where she was — never from the top. Half transport config (`startSpeakingPlan` / `stopSpeakingPlan`), half prompt. | `prompts/intake-coordinator.md` § “Interruptions and listening”, § 2.8. **PENDING** live proof — needs a dedicated dial. |
 | **Duplicate submission on retry** | Deduplication is **full-row**: an identical demographic record returns the existing patient (`200`, same id) rather than inserting a second, so a retried save is safe. A shared household phone or a matching name alone still creates a new record. End-of-call reports are idempotent on `vapi_call_id`. | `tests/api/patients.dedupe.test.ts` — *returns 201 on the first create and 200 with the same id on an identical second create*; `tests/vapi/events.test.ts` — *is IDEMPOTENT — the same vapi_call_id twice yields exactly one row*. |
+| **Caller asks for a time we cannot do** | Availability is derived from the `appointments` table at query time, so “Monday at one” is answered against what is actually open. The four ways it can fail are **distinct sentences, not one apology**: the clinic is closed that day, the time has already gone by, the day is genuinely booked out, or the day has simply ended. The tool returns a reason and the model phrases it — a `switch` with no `default`, so an unhandled reason is a compile error rather than a wrong sentence on a call. Two callers racing for the same 2 PM is blocked by a **partial unique index**, not a check-then-insert, and the loser is re-offered rather than told the system is down. | `tests/api/availability.test.ts`; `tests/vapi/tool.appointments.test.ts` — the `wq*` cases assert the *sentence*, e.g. a plain request must match `/^Available:/` and must **not** say “taken”; `tests/normalize/when.test.ts` — 52 cases on spoken time and date parsing. **PENDING** live proof — needs a dial. |
 | **Caller silence / timeout** | Nora waits, checks in once (*“Are you still there?”*), and after a second silence tells the caller to ring back and wraps up. `maxDurationSeconds: 600` is the hard backstop. **Unverified** — no automated test and no live-call evidence; the behavior is defined in the prompt and assistant config only. | `prompts/intake-coordinator.md` § “Silence and confusion”, § 2.10 (`maxDurationSeconds`). No test. |
 
 ---
@@ -240,12 +243,13 @@ Each named scenario has a *decided* behavior, not an accidental one. Rows that a
 
 ### Nice-to-haves not built yet
 
-Spanish language switch · rescheduling and cancelling appointments (booking only, for now) · real
-clinic availability instead of computed mock slots · REST auth + pagination · editable dashboard ·
-street-name spell-back for STT mishears.
+Spanish language switch · REST auth + pagination · editable dashboard · street-name spell-back for
+STT mishears · staff-facing calendar UI (availability is served to the agent, not rendered).
 
-Appointment scheduling is built and tested, but the offer has **not yet been exercised on a live
-call** — the tool path is covered by the suite; the conversational half is not.
+Scheduling is built and tested — booking, rescheduling and cancelling, against availability derived
+from the `appointments` table rather than a fixed slot list. What the suite **cannot** reach is what
+the agent *says* about it: the tool path is covered, the conversational half is verified only as far
+as a call has exercised it.
 
 ---
 
